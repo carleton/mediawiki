@@ -1185,3 +1185,15 @@ ul[class*="block-grid"] {
 .mw-indicator {
 	display: inline-block;
 }
+/*style all images*/
+.thumb .thumbinner {
+    padding: 20px;
+    border: 1px solid #ddd;
+}
+
+.thumb .thumbcaption {
+    padding-top: 20px;
+    margin-top: 20px;
+    line-height: 20px;
+    border-top: 1px dotted #ddd;
+}
