@@ -79,7 +79,6 @@ class DiffEngine {
 	 * @return DiffOp[]
 	 */
 	public function diff( $from_lines, $to_lines ) {
-
 		// Diff and store locally
 		$this->diffInternal( $from_lines, $to_lines );
 
@@ -182,7 +181,7 @@ class DiffEngine {
 			}
 
 			while ( $i < $len && !$changed[$i] ) {
-				assert( $j < $other_len && ! $other_changed[$j] );
+				assert( $j < $other_len && !$other_changed[$j] );
 				$i++;
 				$j++;
 				while ( $j < $other_len && $other_changed[$j] ) {
@@ -247,7 +246,7 @@ class DiffEngine {
 						$i++;
 					}
 
-					assert( $j < $other_len && ! $other_changed[$j] );
+					assert( $j < $other_len && !$other_changed[$j] );
 					$j++;
 					if ( $j < $other_len && $other_changed[$j] ) {
 						$corresponding = $i;

@@ -21,8 +21,15 @@
  * @ingroup Database
  */
 
+namespace Wikimedia\Rdbms;
+
 use Psr\Log\LoggerInterface;
 use Wikimedia\ScopedCallback;
+use BagOStuff;
+use EmptyBagOStuff;
+use WANObjectCache;
+use Exception;
+use RuntimeException;
 
 /**
  * An interface for generating database load balancers
@@ -48,7 +55,7 @@ abstract class LBFactory implements ILBFactory {
 	/** @var BagOStuff */
 	protected $srvCache;
 	/** @var BagOStuff */
-	protected $memCache;
+	protected $memStash;
 	/** @var WANObjectCache */
 	protected $wanCache;
 
@@ -86,7 +93,7 @@ abstract class LBFactory implements ILBFactory {
 		}
 
 		$this->srvCache = isset( $conf['srvCache'] ) ? $conf['srvCache'] : new EmptyBagOStuff();
-		$this->memCache = isset( $conf['memCache'] ) ? $conf['memCache'] : new EmptyBagOStuff();
+		$this->memStash = isset( $conf['memStash'] ) ? $conf['memStash'] : new EmptyBagOStuff();
 		$this->wanCache = isset( $conf['wanCache'] )
 			? $conf['wanCache']
 			: WANObjectCache::newEmpty();
@@ -100,7 +107,7 @@ abstract class LBFactory implements ILBFactory {
 				trigger_error( E_USER_WARNING, get_class( $e ) . ': ' . $e->getMessage() );
 			};
 
-		$this->profiler = isset( $params['profiler'] ) ? $params['profiler'] : null;
+		$this->profiler = isset( $conf['profiler'] ) ? $conf['profiler'] : null;
 		$this->trxProfiler = isset( $conf['trxProfiler'] )
 			? $conf['trxProfiler']
 			: new TransactionProfiler();
@@ -111,9 +118,9 @@ abstract class LBFactory implements ILBFactory {
 			'ChronologyProtection' => 'true'
 		];
 
-		$this->cliMode = isset( $params['cliMode'] ) ? $params['cliMode'] : PHP_SAPI === 'cli';
+		$this->cliMode = isset( $conf['cliMode'] ) ? $conf['cliMode'] : PHP_SAPI === 'cli';
 		$this->hostname = isset( $conf['hostname'] ) ? $conf['hostname'] : gethostname();
-		$this->agent = isset( $params['agent'] ) ? $params['agent'] : '';
+		$this->agent = isset( $conf['agent'] ) ? $conf['agent'] : '';
 
 		$this->ticket = mt_rand();
 	}
@@ -243,6 +250,10 @@ abstract class LBFactory implements ILBFactory {
 		} );
 	}
 
+	public function hasTransactionRound() {
+		return ( $this->trxRoundId !== false );
+	}
+
 	/**
 	 * Log query info if multi DB transactions are going to be committed now
 	 */
@@ -326,7 +337,7 @@ abstract class LBFactory implements ILBFactory {
 		$masterPositions = array_fill( 0, count( $lbs ), false );
 		foreach ( $lbs as $i => $lb ) {
 			if ( $lb->getServerCount() <= 1 ) {
-				// Bug 27975 - Don't try to wait for replica DBs if there are none
+				// T29975 - Don't try to wait for replica DBs if there are none
 				// Prevents permission error when getting master position
 				continue;
 			} elseif ( $opts['ifWritesSince']
@@ -355,6 +366,7 @@ abstract class LBFactory implements ILBFactory {
 
 		if ( $failed ) {
 			throw new DBReplicationWaitError(
+				null,
 				"Could not wait for replica DBs to catch up to " .
 				implode( ', ', $failed )
 			);
@@ -423,7 +435,7 @@ abstract class LBFactory implements ILBFactory {
 		}
 
 		$this->chronProt = new ChronologyProtector(
-			$this->memCache,
+			$this->memStash,
 			[
 				'ip' => $this->requestInfo['IPAddress'],
 				'agent' => $this->requestInfo['UserAgent'],
@@ -497,7 +509,8 @@ abstract class LBFactory implements ILBFactory {
 			'errorLogger' => $this->errorLogger,
 			'hostname' => $this->hostname,
 			'cliMode' => $this->cliMode,
-			'agent' => $this->agent
+			'agent' => $this->agent,
+			'chronologyProtector' => $this->getChronologyProtector()
 		];
 	}
 
@@ -517,7 +530,7 @@ abstract class LBFactory implements ILBFactory {
 			$prefix
 		);
 
-		$this->forEachLB( function( ILoadBalancer $lb ) use ( $prefix ) {
+		$this->forEachLB( function ( ILoadBalancer $lb ) use ( $prefix ) {
 			$lb->setDomainPrefix( $prefix );
 		} );
 	}
@@ -554,7 +567,7 @@ abstract class LBFactory implements ILBFactory {
 	 * @return ScopedCallback|null
 	 */
 	final protected function getScopedPHPBehaviorForCommit() {
-		if ( PHP_SAPI != 'cli' ) { // http://bugs.php.net/bug.php?id=47540
+		if ( PHP_SAPI != 'cli' ) { // https://bugs.php.net/bug.php?id=47540
 			$old = ignore_user_abort( true ); // avoid half-finished operations
 			return new ScopedCallback( function () use ( $old ) {
 				ignore_user_abort( $old );
@@ -568,3 +581,5 @@ abstract class LBFactory implements ILBFactory {
 		$this->destroy();
 	}
 }
+
+class_alias( LBFactory::class, 'LBFactory' );

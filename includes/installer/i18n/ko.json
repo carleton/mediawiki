@@ -11,7 +11,8 @@
 			"Hwangjy9",
 			"Macofe",
 			"Mooozi",
-			"Ykhwong"
+			"Ykhwong",
+			"Jerrykim306"
 		]
 	},
 	"config-desc": "미디어위키를 위한 설치 관리자",
@@ -60,7 +61,7 @@
 	"config-unicode-using-intl": "유니코드 정규화에 [http://pecl.php.net/intl intl PECL 확장 기능]을 사용합니다.",
 	"config-unicode-pure-php-warning": "<strong>경고:</strong> 유니코드 정규화를 처리할 [http://pecl.php.net/intl intl PECL 확장 기능]을 사용할 수 없기 때문에 느린 pure-PHP 구현을 대신 사용합니다.\n트래픽이 높은 사이트에서 실행하시려면 [https://www.mediawiki.org/wiki/Special:MyLanguage/Unicode_normalization_considerations 유니코드 정규화]를 읽어보셔야 합니다.",
 	"config-unicode-update-warning": "<strong>경고:</strong> 유니코드 정규화 래퍼의 설치된 버전은 [http://site.icu-project.org/ ICU 프로젝트]의 라이브러리의 이전 버전을 사용합니다.\n만약 유니코드를 사용하는 것에 대해 우려가 된다면 [https://www.mediawiki.org/wiki/Special:MyLanguage/Unicode_normalization_considerations 업그레이드]해야합니다.",
-	"config-no-db": "적절한 데이터베이스 드라이버를 찾을 수 없습니다! PHP용 데이터베이스 드라이버를 설치해야 합니다.\n다음 데이터베이스 {{PLURAL:$2|유형을 지원합니다}}: $1.\n\nPHP를 직접 컴파일했다면, 예를 들어 <code>./configure --with-mysql</code>을 사용하여, 데이터베이스 클라이언트를 활성화하도록 다시 설정하세요.\n데비안이나 우분투 패키지에서 PHP를 설치했다면 <code>php5-mysql</code> 모듈도 설치해야 합니다.",
+	"config-no-db": "적절한 데이터베이스 드라이버를 찾을 수 없습니다! PHP용 데이터베이스 드라이버를 설치해야 합니다.\n다음 데이터베이스 {{PLURAL:$2|유형을}} 지원합니다: $1.\n\nPHP를 직접 컴파일했다면, 예를 들어 <code>./configure --with-mysqli</code>을 사용하여, 데이터베이스 클라이언트를 활성화하도록 다시 설정하세요.\n데비안이나 우분투 패키지에서 PHP를 설치했다면 <code>php5-mysql</code> 패키지도 설치해야 합니다.",
 	"config-outdated-sqlite": "<strong>경고:</strong> 최소 요구 버전 $2 보다 낮은 SQLite $1이(가) 있습니다. SQLite를 사용할 수 없습니다.",
 	"config-no-fts3": "<strong>경고:</strong> SQLite를 [//sqlite.org/fts3.html FTS3 모듈] 없이 컴파일하며, 검색 기능은 백엔드에 사용할 수 없습니다.",
 	"config-pcre-old": "<strong>치명:</strong> PCRE $1 또는 그 이상이 필요합니다.\nPHP 바이너리는 PCRE $2에 연결되어 있습니다. [https://www.mediawiki.org/wiki/Manual:Errors_and_symptoms/PCRE 자세한 정보].",
@@ -87,6 +88,7 @@
 	"config-no-cli-uploads-check": "<strong>경고:</strong> 올리기를 위한 기본 디렉터리(<code>$1</code>)는 CLI를 설치하는 동안 임의의 스크립트 실행에 대한 취약점에 대해 검사되지 않습니다.",
 	"config-brokenlibxml": "시스템에 버그가 있는 PHP와 libxml2의 조합이 있으며 미디어위키나 다른 웹 애플리케이션에 숨겨진 데이터 손상을 일으킬 수 있습니다.\nlibxml2 2.7.3 이후 버전으로 업그레이드하세요. ([https://bugs.php.net/bug.php?id=45996 PHP에 제기한 버그])\n설치가 중단되었습니다.",
 	"config-suhosin-max-value-length": "수호신(Suhosin)이 설치되고 $1 바이트로 GET 매개 변수 <code>length</code>를 제한하고 있습니다.\n미디어위키의 ResourceLoader 구성 요소는 이 제한을 회피하지만 성능이 저하됩니다.\n가능하면 <code>php.ini</code>의 <code>suhosin.get.max_value_length</code>를 1024 이상으로 설정하고 <code>LocalSettings.php</code>의 <code>$wgResourceLoaderMaxQueryLength</code>를 같은 값으로 설정해야 합니다.",
+	"config-using-32bit": "<strong>경고:</strong> 시스템이 32비트 정수와 함께 실행 중인 것으로 보입니다. 이것은 [https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:32-bit 권장되지 않습니다].",
 	"config-db-type": "데이터베이스 종류:",
 	"config-db-host": "데이터베이스 호스트:",
 	"config-db-host-help": "데이터베이스 서버가 다른 서버에 있으면 여기에 호스트 이름이나 IP 주소를 입력하세요.\n\n공유하는 웹 호스팅을 사용하고 있으면 호스팅 제공 업체는 올바른 호스트 이름을 설명하고 있을 것입니다.\n\nWindows 서버에 설치하고 MySQL을 사용하면 \"localhost\"가 서버 이름으로는 작동하지 않을 수 있습니다. 그렇게 된다면 로컬 IP 주소로 \"127.0.0.1\"을 시도하세요.\n\nPostgreSQL을 사용하면 유닉스 소켓을 통해 연결되도록 입력란을 비워두세요.",
@@ -282,11 +284,11 @@
 	"config-install-schema": "스키마를 만드는 중",
 	"config-install-pg-schema-not-exist": "PostgreSQL 스키마가 존재하지 않습니다.",
 	"config-install-pg-schema-failed": "테이블을 만드는 데 실패했습니다.\n\"$2\" 스키마에 쓸 수 있는 \"$1\" 사용자가 있는지 확인하세요.",
-	"config-install-pg-commit": "바뀐 사항을 적용하는 중",
+	"config-install-pg-commit": "변경사항을 적용하는 중",
 	"config-install-pg-plpgsql": "PL/pgSQL 언어에 대해 확인하는 중",
 	"config-pg-no-plpgsql": "$1 데이터베이스에 PL/pgSQL 언어를 설치해야 합니다",
 	"config-pg-no-create-privs": "설치를 위한 지정한 계정에 계정을 만드는 데 충분한 권한이 없습니다,",
-	"config-pg-not-in-role": "웹 사용자로 지정한 계정이 이미 존재합니다.\n설치를 위해 지정한 사용자는 슈퍼 사용자와 웹 사용자의 역할 구성원이 아니므로 웹 사용자가 소유한 개체를 만들 수 없습니다.\n\n현재 미디어위키는 테이블을 웹 사용자가 소유해야 합니다. 다른 웹 계정 이름을 지정하거나 \"뒤로\"를 클릭하고 적절한 권한의 설치할 사용자를 지정하세요.",
+	"config-pg-not-in-role": "웹 사용자로 지정한 계정이 이미 존재합니다.\n설치를 위해 지정한 사용자는 슈퍼 사용자와 웹 사용자의 역할 회원이 아니므로 웹 사용자가 소유한 개체를 만들 수 없습니다.\n\n현재 미디어위키는 테이블을 웹 사용자가 소유해야 합니다. 다른 웹 계정 이름을 지정하거나 \"뒤로\"를 클릭하고 적절한 권한의 설치할 사용자를 지정하세요.",
 	"config-install-user": "데이터베이스 사용자를 만드는 중",
 	"config-install-user-alreadyexists": "\"$1\" 사용자가 이미 존재합니다",
 	"config-install-user-create-failed": "\"$1\" 사용자 만드는 데 실패: $2",
@@ -308,6 +310,7 @@
 	"config-install-subscribe-fail": "미디어위키 알림을 구독할 수 없습니다: $1",
 	"config-install-subscribe-notpossible": "cURL이 설치되어 있지 않고 <code>allow_url_fopen</code>을 사용할 수 없습니다.",
 	"config-install-mainpage": "기본 내용으로 대문을 만드는 중",
+	"config-install-mainpage-exists": "대문은 이미 존재함, 건너뜀",
 	"config-install-extension-tables": "활성화된 확장 기능을 위한 테이블을 만드는 중",
 	"config-install-mainpage-failed": "대문을 삽입할 수 없습니다: $1",
 	"config-install-done": "<strong>축하합니다!</strong>\n미디어위키를 설치했습니다.\n\n설치 관리자가 <code>LocalSettings.php</code> 파일을 만들었습니다.\n여기에 모든 설정이 포함되어 있습니다.\n\n파일을 다운로드하여 위키 설치의 거점에 넣어야 합니다. (index.php와 같은 디렉터리) 다운로드가 자동으로 시작됩니다.\n\n다운로드가 제공되지 않을 경우나 그것을 취소한 경우에는 아래의 링크를 클릭하여 다운로드를 다시 시작할 수 있습니다:\n\n$3\n\n<strong>참고:</strong> 이 생성한 설정 파일을 다운로드하지 않고 설치를 끝내면 이 파일은 나중에 사용할 수 없습니다.\n\n완료되었으면 <strong>[$2 위키에 들어갈 수 있습니다]</strong>.",
@@ -317,6 +320,8 @@
 	"config-help-tooltip": "확장하려면 클릭",
 	"config-nofile": "\"$1\" 파일을 찾을 수 없습니다. 이미 삭제되었나요?",
 	"config-extension-link": "당신의 위키가 [https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:Extensions 확장 기능]을 지원한다는 것을 알고 계십니까?\n\n[https://www.mediawiki.org/wiki/Special:MyLanguage/Category:Extensions_by_category 분류별 확장 기능]을 찾아보실 수 있습니다.",
+	"config-skins-screenshots": "$1 (스크린샷: $2)",
+	"config-screenshot": "스크린샷",
 	"mainpagetext": "<strong>미디어위키가 설치되었습니다.</strong>",
-	"mainpagedocfooter": "[https://meta.wikimedia.org/wiki/Help:Contents 이곳]에서 위키 소프트웨어에 대한 정보를 얻을 수 있습니다.\n\n== 시작하기 ==\n\n* [https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:Configuration_settings 설정하기 목록]\n* [https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:FAQ 미디어위키 FAQ]\n* [https://lists.wikimedia.org/mailman/listinfo/mediawiki-announce 미디어위키 릴리스 메일링 리스트]\n* [https://www.mediawiki.org/wiki/Special:MyLanguage/Localisation#Translation_resources 내 언어로 미디어위키 지역화]\n* [https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:Combating_spam 당신의 위키에서 스팸에 대처하는 법을 배우세요]"
+	"mainpagedocfooter": "[https://www.mediawiki.org/wiki/Special:MyLanguage/Help:Contents 이곳]에서 위키 소프트웨어에 대한 정보를 얻을 수 있습니다.\n\n== 시작하기 ==\n\n* [https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:Configuration_settings 설정하기 목록]\n* [https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:FAQ 미디어위키 FAQ]\n* [https://lists.wikimedia.org/mailman/listinfo/mediawiki-announce 미디어위키 릴리스 메일링 리스트]\n* [https://www.mediawiki.org/wiki/Special:MyLanguage/Localisation#Translation_resources 내 언어로 미디어위키 지역화]\n* [https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:Combating_spam 당신의 위키에서 스팸에 대처하는 법을 배우세요]"
 }

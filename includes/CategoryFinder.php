@@ -20,6 +20,8 @@
  * @file
  */
 
+use Wikimedia\Rdbms\IDatabase;
+
 /**
  * The "CategoryFinder" class takes a list of articles, creates an internal
  * representation of all their parent categories (as well as parents of
@@ -40,7 +42,6 @@
  *     $a = $cf->run();
  *     print implode( ',' , $a );
  * @endcode
- *
  */
 class CategoryFinder {
 	/** @var int[] The original article IDs passed to the seed function */
@@ -185,7 +186,6 @@ class CategoryFinder {
 	 * Scans a "parent layer" of the articles/categories in $this->next
 	 */
 	private function scanNextLayer() {
-
 		# Find all parents of the article currently in $this->next
 		$layer = [];
 		$res = $this->dbr->select(

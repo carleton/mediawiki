@@ -24,6 +24,9 @@
  * @author Rob Church <robchur@gmail.com>
  */
 
+use Wikimedia\Rdbms\ResultWrapper;
+use Wikimedia\Rdbms\IDatabase;
+
 /**
  * Special:Listredirects - Lists all the redirects on the wiki.
  * @ingroup SpecialPage
@@ -134,7 +137,7 @@ class ListredirectsPage extends QueryPage {
 			# Make a link to the destination page
 			$lang = $this->getLanguage();
 			$arr = $lang->getArrow() . $lang->getDirMark();
-			$targetLink = $linkRenderer->makeLink( $target );
+			$targetLink = $linkRenderer->makeLink( $target, $target->getFullText() );
 
 			return "$rd_link $arr $targetLink";
 		} else {

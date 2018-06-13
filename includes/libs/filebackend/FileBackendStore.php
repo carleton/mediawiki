@@ -19,8 +19,8 @@
  *
  * @file
  * @ingroup FileBackend
- * @author Aaron Schulz
  */
+use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 /**
  * @brief Base class for all backends using particular storage medium.
@@ -359,7 +359,7 @@ abstract class FileBackendStore extends FileBackend {
 			$status->merge( $this->doConcatenate( $params ) );
 			$sec = microtime( true ) - $start_time;
 			if ( !$status->isOK() ) {
-				$this->logger->error( get_class( $this ) . "-{$this->name}" .
+				$this->logger->error( static::class . "-{$this->name}" .
 					" failed to concatenate " . count( $params['srcs'] ) . " file(s) [$sec sec]" );
 			}
 		}
@@ -729,7 +729,7 @@ abstract class FileBackendStore extends FileBackend {
 	/**
 	 * @see FileBackendStore::getFileXAttributes()
 	 * @param array $params
-	 * @return bool|string
+	 * @return array[][]
 	 */
 	protected function doGetFileXAttributes( array $params ) {
 		return [ 'headers' => [], 'metadata' => [] ]; // not supported
@@ -1122,7 +1122,7 @@ abstract class FileBackendStore extends FileBackend {
 				$subStatus->success[$i] = false;
 				++$subStatus->failCount;
 			}
-			$this->logger->error( get_class( $this ) . "-{$this->name} " .
+			$this->logger->error( static::class . "-{$this->name} " .
 				" stat failure; aborted operations: " . FormatJson::encode( $ops ) );
 		}
 
@@ -1199,21 +1199,20 @@ abstract class FileBackendStore extends FileBackend {
 	 * to the order in which the handles where given.
 	 *
 	 * @param FileBackendStoreOpHandle[] $fileOpHandles
-	 *
-	 * @throws FileBackendError
 	 * @return StatusValue[] Map of StatusValue objects
+	 * @throws FileBackendError
 	 */
 	final public function executeOpHandlesInternal( array $fileOpHandles ) {
 		$ps = $this->scopedProfileSection( __METHOD__ . "-{$this->name}" );
 
 		foreach ( $fileOpHandles as $fileOpHandle ) {
 			if ( !( $fileOpHandle instanceof FileBackendStoreOpHandle ) ) {
-				throw new InvalidArgumentException( "Got a non-FileBackendStoreOpHandle object." );
+				throw new InvalidArgumentException( "Expected FileBackendStoreOpHandle object." );
 			} elseif ( $fileOpHandle->backend->getName() !== $this->getName() ) {
-				throw new InvalidArgumentException(
-					"Got a FileBackendStoreOpHandle for the wrong backend." );
+				throw new InvalidArgumentException( "Expected handle for this file backend." );
 			}
 		}
+
 		$res = $this->doExecuteOpHandlesInternal( $fileOpHandles );
 		foreach ( $fileOpHandles as $fileOpHandle ) {
 			$fileOpHandle->closeResources();
@@ -1715,7 +1714,7 @@ abstract class FileBackendStore extends FileBackend {
 			return; // invalid storage path
 		}
 		$mtime = ConvertibleTimestamp::convert( TS_UNIX, $val['mtime'] );
-		$ttl = $this->memCache->adaptiveTTL( $mtime, 7 * 86400, 300, .1 );
+		$ttl = $this->memCache->adaptiveTTL( $mtime, 7 * 86400, 300, 0.1 );
 		$key = $this->fileCacheKey( $path );
 		// Set the cache unless it is currently salted.
 		$this->memCache->set( $key, $val, $ttl );
@@ -1841,14 +1840,8 @@ abstract class FileBackendStore extends FileBackend {
 			return call_user_func_array( $this->mimeCallback, func_get_args() );
 		}
 
-		$mime = null;
-		if ( $fsPath !== null && function_exists( 'finfo_file' ) ) {
-			$finfo = finfo_open( FILEINFO_MIME_TYPE );
-			$mime = finfo_file( $finfo, $fsPath );
-			finfo_close( $finfo );
-		}
-
-		return is_string( $mime ) ? $mime : 'unknown/unknown';
+		$mime = ( $fsPath !== null ) ? mime_content_type( $fsPath ) : false;
+		return $mime ?: 'unknown/unknown';
 	}
 }
 

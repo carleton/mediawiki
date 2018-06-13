@@ -21,6 +21,9 @@
  *
  * @file
  */
+
+use Wikimedia\Rdbms\Database;
+use Wikimedia\Rdbms\IDatabase;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\Interwiki\InterwikiLookup;
 use MediaWiki\MediaWikiServices;
@@ -134,7 +137,7 @@ class Title implements LinkTarget {
 
 	/**
 	 * @var int Namespace index when there is no namespace. Don't change the
-	 *   following default, NS_MAIN is hardcoded in several places. See bug 696.
+	 *   following default, NS_MAIN is hardcoded in several places. See T2696.
 	 *   Zero except in {{transclusion}} tags.
 	 */
 	public $mDefaultNamespace = NS_MAIN;
@@ -250,6 +253,9 @@ class Title implements LinkTarget {
 	 * Create a new Title from text, such as what one would find in a link. De-
 	 * codes any HTML entities in the text.
 	 *
+	 * Title objects returned by this method are guaranteed to be valid, and
+	 * thus return true from the isValid() method.
+	 *
 	 * @param string|int|null $text The link text; spaces, prefixes, and an
 	 *   initial ':' indicating the main namespace are accepted.
 	 * @param int $defaultNamespace The namespace to use if none is specified
@@ -269,7 +275,7 @@ class Title implements LinkTarget {
 		}
 
 		try {
-			return Title::newFromTextThrow( strval( $text ), $defaultNamespace );
+			return self::newFromTextThrow( strval( $text ), $defaultNamespace );
 		} catch ( MalformedTitleException $ex ) {
 			return null;
 		}
@@ -280,6 +286,9 @@ class Title implements LinkTarget {
 	 * rather than returning null.
 	 *
 	 * The exception subclasses encode detailed information about why the title is invalid.
+	 *
+	 * Title objects returned by this method are guaranteed to be valid, and
+	 * thus return true from the isValid() method.
 	 *
 	 * @see Title::newFromText
 	 *
@@ -307,7 +316,7 @@ class Title implements LinkTarget {
 			}
 		}
 
-		// Convert things like &eacute; &#257; or &#x3017; into normalized (bug 14952) text
+		// Convert things like &eacute; &#257; or &#x3017; into normalized (T16952) text
 		$filteredText = Sanitizer::decodeCharReferencesAndNormalize( $text );
 
 		$t = new Title();
@@ -408,7 +417,7 @@ class Title implements LinkTarget {
 			__METHOD__
 		);
 		if ( $row !== false ) {
-			$title = Title::newFromRow( $row );
+			$title = self::newFromRow( $row );
 		} else {
 			$title = null;
 		}
@@ -436,7 +445,7 @@ class Title implements LinkTarget {
 
 		$titles = [];
 		foreach ( $res as $row ) {
-			$titles[] = Title::newFromRow( $row );
+			$titles[] = self::newFromRow( $row );
 		}
 		return $titles;
 	}
@@ -497,10 +506,19 @@ class Title implements LinkTarget {
 
 	/**
 	 * Create a new Title from a namespace index and a DB key.
-	 * It's assumed that $ns and $title are *valid*, for instance when
-	 * they came directly from the database or a special page name.
-	 * For convenience, spaces are converted to underscores so that
-	 * eg user_text fields can be used directly.
+	 *
+	 * It's assumed that $ns and $title are safe, for instance when
+	 * they came directly from the database or a special page name,
+	 * not from user input.
+	 *
+	 * No validation is applied. For convenience, spaces are normalized
+	 * to underscores, so that e.g. user_text fields can be used directly.
+	 *
+	 * @note This method may return Title objects that are "invalid"
+	 * according to the isValid() method. This is usually caused by
+	 * configuration changes: e.g. a namespace that was once defined is
+	 * no longer configured, or a character that was once allowed in
+	 * titles is now forbidden.
 	 *
 	 * @param int $ns The namespace of the article
 	 * @param string $title The unprefixed database key form
@@ -526,6 +544,10 @@ class Title implements LinkTarget {
 	 * The parameters will be checked for validity, which is a bit slower
 	 * than makeTitle() but safer for user-provided data.
 	 *
+	 * Title objects returned by makeTitleSafe() are guaranteed to be valid,
+	 * that is, they return true from the isValid() method. If no valid Title
+	 * can be constructed from the input, this method returns null.
+	 *
 	 * @param int $ns The namespace of the article
 	 * @param string $title Database key form
 	 * @param string $fragment The link fragment (after the "#")
@@ -533,12 +555,15 @@ class Title implements LinkTarget {
 	 * @return Title|null The new object, or null on an error
 	 */
 	public static function makeTitleSafe( $ns, $title, $fragment = '', $interwiki = '' ) {
+		// NOTE: ideally, this would just call makeTitle() and then isValid(),
+		// but presently, that means more overhead on a potential performance hotspot.
+
 		if ( !MWNamespace::exists( $ns ) ) {
 			return null;
 		}
 
 		$t = new Title();
-		$t->mDbkeyform = Title::makeName( $ns, $title, $fragment, $interwiki, true );
+		$t->mDbkeyform = self::makeName( $ns, $title, $fragment, $interwiki, true );
 
 		try {
 			$t->secureAndSplit();
@@ -554,10 +579,10 @@ class Title implements LinkTarget {
 	 * @return Title The new object
 	 */
 	public static function newMainPage() {
-		$title = Title::newFromText( wfMessage( 'mainpage' )->inContentLanguage()->text() );
+		$title = self::newFromText( wfMessage( 'mainpage' )->inContentLanguage()->text() );
 		// Don't give fatal errors if the message is broken
 		if ( !$title ) {
-			$title = Title::newFromText( 'Main Page' );
+			$title = self::newFromText( 'Main Page' );
 		}
 		return $title;
 	}
@@ -745,6 +770,8 @@ class Title implements LinkTarget {
 	/**
 	 * Escape a text fragment, say from a link, for a URL
 	 *
+	 * @deprecated since 1.30, use Sanitizer::escapeIdForLink() or escapeIdForExternalInterwiki()
+	 *
 	 * @param string $fragment Containing a URL or link fragment (after the "#")
 	 * @return string Escaped string
 	 */
@@ -769,6 +796,36 @@ class Title implements LinkTarget {
 			return strcmp( $a->getText(), $b->getText() );
 		} else {
 			return $a->getNamespace() - $b->getNamespace();
+		}
+	}
+
+	/**
+	 * Returns true if the title is valid, false if it is invalid.
+	 *
+	 * Valid titles can be round-tripped via makeTitleSafe() and newFromText().
+	 * Invalid titles may get returned from makeTitle(), and it may be useful to
+	 * allow them to exist, e.g. in order to process log entries about pages in
+	 * namespaces that belong to extensions that are no longer installed.
+	 *
+	 * @note This method is relatively expensive. When constructing Title
+	 * objects that need to be valid, use an instantiator method that is guaranteed
+	 * to return valid titles, such as makeTitleSafe() or newFromText().
+	 *
+	 * @return bool
+	 */
+	public function isValid() {
+		$ns = $this->getNamespace();
+
+		if ( !MWNamespace::exists( $ns ) ) {
+			return false;
+		}
+
+		try {
+			$parser = MediaWikiServices::getInstance()->getTitleParser();
+			$parser->parseTitle( $this->getDBkey(), $ns );
+			return true;
+		} catch ( MalformedTitleException $ex ) {
+			return false;
 		}
 	}
 
@@ -835,7 +892,7 @@ class Title implements LinkTarget {
 	/**
 	 * Returns the DB name of the distant wiki which owns the object.
 	 *
-	 * @return string The DB name
+	 * @return string|false The DB name
 	 */
 	public function getTransWikiID() {
 		if ( !$this->isExternal() ) {
@@ -930,7 +987,7 @@ class Title implements LinkTarget {
 	 */
 	public function getContentModel( $flags = 0 ) {
 		if ( !$this->mForcedContentModel
-			&& ( !$this->mContentModel || $flags === Title::GAID_FOR_UPDATE )
+			&& ( !$this->mContentModel || $flags === self::GAID_FOR_UPDATE )
 			&& $this->getArticleID( $flags )
 		) {
 			$linkCache = LinkCache::singleton();
@@ -974,7 +1031,7 @@ class Title implements LinkTarget {
 	/**
 	 * Get the namespace text
 	 *
-	 * @return string Namespace text
+	 * @return string|false Namespace text
 	 */
 	public function getNsText() {
 		if ( $this->isExternal() ) {
@@ -1017,12 +1074,26 @@ class Title implements LinkTarget {
 	}
 
 	/**
-	 * Could this title have a corresponding talk page?
+	 * Can this title have a corresponding talk page?
 	 *
-	 * @return bool
+	 * @deprecated since 1.30, use canHaveTalkPage() instead.
+	 *
+	 * @return bool True if this title either is a talk page or can have a talk page associated.
 	 */
 	public function canTalk() {
-		return MWNamespace::canTalk( $this->mNamespace );
+		return $this->canHaveTalkPage();
+	}
+
+	/**
+	 * Can this title have a corresponding talk page?
+	 *
+	 * @see MWNamespace::hasTalkNamespace
+	 * @since 1.30
+	 *
+	 * @return bool True if this title either is a talk page or can have a talk page associated.
+	 */
+	public function canHaveTalkPage() {
+		return MWNamespace::hasTalkNamespace( $this->mNamespace );
 	}
 
 	/**
@@ -1080,7 +1151,7 @@ class Title implements LinkTarget {
 			if ( $canonicalName ) {
 				$localName = SpecialPageFactory::getLocalNameFor( $canonicalName, $par );
 				if ( $localName != $this->mDbkeyform ) {
-					return Title::makeTitle( NS_SPECIAL, $localName );
+					return self::makeTitle( NS_SPECIAL, $localName );
 				}
 			}
 		}
@@ -1179,7 +1250,7 @@ class Title implements LinkTarget {
 	 * @return bool
 	 */
 	public function isMainPage() {
-		return $this->equals( Title::newMainPage() );
+		return $this->equals( self::newMainPage() );
 	}
 
 	/**
@@ -1232,12 +1303,6 @@ class Title implements LinkTarget {
 		$isCssOrJsPage = NS_MEDIAWIKI == $this->mNamespace
 			&& ( $this->hasContentModel( CONTENT_MODEL_CSS )
 				|| $this->hasContentModel( CONTENT_MODEL_JAVASCRIPT ) );
-
-		# @note This hook is also called in ContentHandler::getDefaultModel.
-		#   It's called here again to make sure hook functions can force this
-		#   method to return true even outside the MediaWiki namespace.
-
-		Hooks::run( 'TitleIsCssOrJsPage', [ $this, &$isCssOrJsPage ], '1.25' );
 
 		return $isCssOrJsPage;
 	}
@@ -1303,7 +1368,24 @@ class Title implements LinkTarget {
 	 * @return Title The object for the talk page
 	 */
 	public function getTalkPage() {
-		return Title::makeTitle( MWNamespace::getTalk( $this->getNamespace() ), $this->getDBkey() );
+		return self::makeTitle( MWNamespace::getTalk( $this->getNamespace() ), $this->getDBkey() );
+	}
+
+	/**
+	 * Get a Title object associated with the talk page of this article,
+	 * if such a talk page can exist.
+	 *
+	 * @since 1.30
+	 *
+	 * @return Title|null The object for the talk page,
+	 *         or null if no associated talk page can exist, according to canHaveTalkPage().
+	 */
+	public function getTalkPageIfDefined() {
+		if ( !$this->canHaveTalkPage() ) {
+			return null;
+		}
+
+		return $this->getTalkPage();
 	}
 
 	/**
@@ -1318,7 +1400,7 @@ class Title implements LinkTarget {
 		if ( $this->getNamespace() == $subjectNS ) {
 			return $this;
 		}
-		return Title::makeTitle( $subjectNS, $this->getDBkey() );
+		return self::makeTitle( $subjectNS, $this->getDBkey() );
 	}
 
 	/**
@@ -1326,7 +1408,7 @@ class Title implements LinkTarget {
 	 * get the talk page, if it is a subject page get the talk page
 	 *
 	 * @since 1.25
-	 * @throws MWException
+	 * @throws MWException If the page doesn't have an other page
 	 * @return Title
 	 */
 	public function getOtherPage() {
@@ -1336,6 +1418,9 @@ class Title implements LinkTarget {
 		if ( $this->isTalkPage() ) {
 			return $this->getSubjectPage();
 		} else {
+			if ( !$this->canHaveTalkPage() ) {
+				throw new MWException( "{$this->getPrefixedText()} does not have an other page" );
+			}
 			return $this->getTalkPage();
 		}
 	}
@@ -1372,14 +1457,16 @@ class Title implements LinkTarget {
 
 	/**
 	 * Get the fragment in URL form, including the "#" character if there is one
+	 *
 	 * @return string Fragment in URL form
 	 */
 	public function getFragmentForURL() {
 		if ( !$this->hasFragment() ) {
 			return '';
-		} else {
-			return '#' . Title::escapeFragmentForURL( $this->getFragment() );
+		} elseif ( $this->isExternal() && !$this->getTransWikiID() ) {
+			return '#' . Sanitizer::escapeIdForExternalInterwiki( $this->getFragment() );
 		}
+		return '#' . Sanitizer::escapeIdForLink( $this->getFragment() );
 	}
 
 	/**
@@ -1412,7 +1499,6 @@ class Title implements LinkTarget {
 			$fragment,
 			$this->getInterwiki()
 		);
-
 	}
 
 	/**
@@ -1423,13 +1509,22 @@ class Title implements LinkTarget {
 	 * @return string The prefixed text
 	 */
 	private function prefix( $name ) {
+		global $wgContLang;
+
 		$p = '';
 		if ( $this->isExternal() ) {
 			$p = $this->mInterwiki . ':';
 		}
 
 		if ( 0 != $this->mNamespace ) {
-			$p .= $this->getNsText() . ':';
+			$nsText = $this->getNsText();
+
+			if ( $nsText === false ) {
+				// See T165149. Awkward, but better than erroneously linking to the main namespace.
+				$nsText = $wgContLang->getNsText( NS_SPECIAL ) . ":Badtitle/NS{$this->mNamespace}";
+			}
+
+			$p .= $nsText . ':';
 		}
 		return $p . $name;
 	}
@@ -1517,7 +1612,7 @@ class Title implements LinkTarget {
 	 * @since 1.20
 	 */
 	public function getRootTitle() {
-		return Title::makeTitle( $this->getNamespace(), $this->getRootText() );
+		return self::makeTitle( $this->getNamespace(), $this->getRootText() );
 	}
 
 	/**
@@ -1557,7 +1652,7 @@ class Title implements LinkTarget {
 	 * @since 1.20
 	 */
 	public function getBaseTitle() {
-		return Title::makeTitle( $this->getNamespace(), $this->getBaseText() );
+		return self::makeTitle( $this->getNamespace(), $this->getBaseText() );
 	}
 
 	/**
@@ -1593,7 +1688,7 @@ class Title implements LinkTarget {
 	 * @since 1.20
 	 */
 	public function getSubpage( $text ) {
-		return Title::makeTitleSafe( $this->getNamespace(), $this->getText() . '/' . $text );
+		return self::makeTitleSafe( $this->getNamespace(), $this->getText() . '/' . $text );
 	}
 
 	/**
@@ -1628,7 +1723,7 @@ class Title implements LinkTarget {
 	 *
 	 * @since 1.19 (r105919)
 	 * @param array|string $query
-	 * @param bool $query2
+	 * @param string|string[]|bool $query2
 	 * @return string
 	 */
 	private static function fixUrlQueryArgs( $query, $query2 = false ) {
@@ -1664,8 +1759,8 @@ class Title implements LinkTarget {
 	 *
 	 * @see self::getLocalURL for the arguments.
 	 * @see wfExpandUrl
-	 * @param array|string $query
-	 * @param bool $query2
+	 * @param string|string[] $query
+	 * @param string|string[]|bool $query2
 	 * @param string $proto Protocol type to use in URL
 	 * @return string The URL
 	 */
@@ -1682,8 +1777,9 @@ class Title implements LinkTarget {
 
 		# Finally, add the fragment.
 		$url .= $this->getFragmentForURL();
-
-		Hooks::run( 'GetFullURL', [ &$this, &$url, $query ] );
+		// Avoid PHP 7.1 warning from passing $this by reference
+		$titleRef = $this;
+		Hooks::run( 'GetFullURL', [ &$titleRef, &$url, $query ] );
 		return $url;
 	}
 
@@ -1701,7 +1797,7 @@ class Title implements LinkTarget {
 	 * @see self::getLocalURL for the arguments.
 	 * @param array|string $query
 	 * @param string $proto Protocol type to use in URL
-	 * @return String. A url suitable to use in an HTTP location header.
+	 * @return string A url suitable to use in an HTTP location header.
 	 */
 	public function getFullUrlForRedirect( $query = '', $proto = PROTO_CURRENT ) {
 		$target = $this;
@@ -1724,11 +1820,11 @@ class Title implements LinkTarget {
 	 *  valid to link, locally, to the current Title.
 	 * @see self::newFromText to produce a Title object.
 	 *
-	 * @param string|array $query An optional query string,
+	 * @param string|string[] $query An optional query string,
 	 *   not used for interwiki links. Can be specified as an associative array as well,
 	 *   e.g., array( 'action' => 'edit' ) (keys and values will be URL-escaped).
 	 *   Some query patterns will trigger various shorturl path replacements.
-	 * @param array $query2 An optional secondary query array. This one MUST
+	 * @param string|string[]|bool $query2 An optional secondary query array. This one MUST
 	 *   be an array. If a string is passed it will be interpreted as a deprecated
 	 *   variant argument and urlencoded into a variant= argument.
 	 *   This second query argument will be added to the $query
@@ -1756,7 +1852,9 @@ class Title implements LinkTarget {
 			$dbkey = wfUrlencode( $this->getPrefixedDBkey() );
 			if ( $query == '' ) {
 				$url = str_replace( '$1', $dbkey, $wgArticlePath );
-				Hooks::run( 'GetLocalURL::Article', [ &$this, &$url ] );
+				// Avoid PHP 7.1 warning from passing $this by reference
+				$titleRef = $this;
+				Hooks::run( 'GetLocalURL::Article', [ &$titleRef, &$url ] );
 			} else {
 				global $wgVariantArticlePath, $wgActionPaths, $wgContLang;
 				$url = false;
@@ -1800,8 +1898,9 @@ class Title implements LinkTarget {
 					$url = "{$wgScript}?title={$dbkey}&{$query}";
 				}
 			}
-
-			Hooks::run( 'GetLocalURL::Internal', [ &$this, &$url, $query ] );
+			// Avoid PHP 7.1 warning from passing $this by reference
+			$titleRef = $this;
+			Hooks::run( 'GetLocalURL::Internal', [ &$titleRef, &$url, $query ] );
 
 			// @todo FIXME: This causes breakage in various places when we
 			// actually expected a local URL and end up with dupe prefixes.
@@ -1809,7 +1908,9 @@ class Title implements LinkTarget {
 				$url = $wgServer . $url;
 			}
 		}
-		Hooks::run( 'GetLocalURL', [ &$this, &$url, $query ] );
+		// Avoid PHP 7.1 warning from passing $this by reference
+		$titleRef = $this;
+		Hooks::run( 'GetLocalURL', [ &$titleRef, &$url, $query ] );
 		return $url;
 	}
 
@@ -1823,7 +1924,7 @@ class Title implements LinkTarget {
 	 * The result obviously should not be URL-escaped, but does need to be
 	 * HTML-escaped if it's being output in HTML.
 	 *
-	 * @param array $query
+	 * @param string|string[] $query
 	 * @param bool $query2
 	 * @param string|int|bool $proto A PROTO_* constant on how the URL should be expanded,
 	 *                               or false (default) for no expansion
@@ -1851,6 +1952,8 @@ class Title implements LinkTarget {
 	 * protocol-relative, the URL will be expanded to http://
 	 *
 	 * @see self::getLocalURL for the arguments.
+	 * @param string $query
+	 * @param string|bool $query2
 	 * @return string The URL
 	 */
 	public function getInternalURL( $query = '', $query2 = false ) {
@@ -1858,7 +1961,9 @@ class Title implements LinkTarget {
 		$query = self::fixUrlQueryArgs( $query, $query2 );
 		$server = $wgInternalServer !== false ? $wgInternalServer : $wgServer;
 		$url = wfExpandUrl( $server . $this->getLocalURL( $query ), PROTO_HTTP );
-		Hooks::run( 'GetInternalURL', [ &$this, &$url, $query ] );
+		// Avoid PHP 7.1 warning from passing $this by reference
+		$titleRef = $this;
+		Hooks::run( 'GetInternalURL', [ &$titleRef, &$url, $query ] );
 		return $url;
 	}
 
@@ -1870,13 +1975,17 @@ class Title implements LinkTarget {
 	 * NOTE: Unlike getInternalURL(), the canonical URL includes the fragment
 	 *
 	 * @see self::getLocalURL for the arguments.
+	 * @param string $query
+	 * @param string|bool $query2
 	 * @return string The URL
 	 * @since 1.18
 	 */
 	public function getCanonicalURL( $query = '', $query2 = false ) {
 		$query = self::fixUrlQueryArgs( $query, $query2 );
 		$url = wfExpandUrl( $this->getLocalURL( $query ) . $this->getFragmentForURL(), PROTO_CANONICAL );
-		Hooks::run( 'GetCanonicalURL', [ &$this, &$url, $query ] );
+		// Avoid PHP 7.1 warning from passing $this by reference
+		$titleRef = $this;
+		Hooks::run( 'GetCanonicalURL', [ &$titleRef, &$url, $query ] );
 		return $url;
 	}
 
@@ -2080,18 +2189,22 @@ class Title implements LinkTarget {
 	private function checkPermissionHooks( $action, $user, $errors, $rigor, $short ) {
 		// Use getUserPermissionsErrors instead
 		$result = '';
-		if ( !Hooks::run( 'userCan', [ &$this, &$user, $action, &$result ] ) ) {
+		// Avoid PHP 7.1 warning from passing $this by reference
+		$titleRef = $this;
+		if ( !Hooks::run( 'userCan', [ &$titleRef, &$user, $action, &$result ] ) ) {
 			return $result ? [] : [ [ 'badaccess-group0' ] ];
 		}
 		// Check getUserPermissionsErrors hook
-		if ( !Hooks::run( 'getUserPermissionsErrors', [ &$this, &$user, $action, &$result ] ) ) {
+		// Avoid PHP 7.1 warning from passing $this by reference
+		$titleRef = $this;
+		if ( !Hooks::run( 'getUserPermissionsErrors', [ &$titleRef, &$user, $action, &$result ] ) ) {
 			$errors = $this->resultToError( $errors, $result );
 		}
 		// Check getUserPermissionsErrorsExpensive hook
 		if (
 			$rigor !== 'quick'
 			&& !( $short && count( $errors ) > 0 )
-			&& !Hooks::run( 'getUserPermissionsErrorsExpensive', [ &$this, &$user, $action, &$result ] )
+			&& !Hooks::run( 'getUserPermissionsErrorsExpensive', [ &$titleRef, &$user, $action, &$result ] )
 		) {
 			$errors = $this->resultToError( $errors, $result );
 		}
@@ -2113,7 +2226,7 @@ class Title implements LinkTarget {
 	private function checkSpecialsAndNSPermissions( $action, $user, $errors, $rigor, $short ) {
 		# Only 'createaccount' can be performed on special pages,
 		# which don't actually exist in the DB.
-		if ( NS_SPECIAL == $this->mNamespace && $action !== 'createaccount' ) {
+		if ( $this->isSpecialPage() && $action !== 'createaccount' ) {
 			$errors[] = [ 'ns-specialprotected' ];
 		}
 
@@ -2142,8 +2255,7 @@ class Title implements LinkTarget {
 	private function checkCSSandJSPermissions( $action, $user, $errors, $rigor, $short ) {
 		# Protect css/js subpages of user pages
 		# XXX: this might be better using restrictions
-		# XXX: right 'editusercssjs' is deprecated, for backward compatibility only
-		if ( $action != 'patrol' && !$user->isAllowed( 'editusercssjs' ) ) {
+		if ( $action != 'patrol' ) {
 			if ( preg_match( '/^' . preg_quote( $user->getName(), '/' ) . '\//', $this->mTextform ) ) {
 				if ( $this->isCssSubpage() && !$user->isAllowedAny( 'editmyusercss', 'editusercss' ) ) {
 					$errors[] = [ 'mycustomcssprotected', $action ];
@@ -2448,7 +2560,7 @@ class Title implements LinkTarget {
 	 *
 	 * @param string $action The action to check
 	 * @param bool $short Short circuit on first error
-	 * @return array List of errors
+	 * @return array Array containing an error message key and any parameters
 	 */
 	private function missingPermissionError( $action, $short ) {
 		// We avoid expensive display logic for quickUserCan's and such
@@ -2456,19 +2568,7 @@ class Title implements LinkTarget {
 			return [ 'badaccess-group0' ];
 		}
 
-		$groups = array_map( [ 'User', 'makeGroupLinkWiki' ],
-			User::getGroupsWithPermission( $action ) );
-
-		if ( count( $groups ) ) {
-			global $wgLang;
-			return [
-				'badaccess-groups',
-				$wgLang->commaList( $groups ),
-				count( $groups )
-			];
-		} else {
-			return [ 'badaccess-group0' ];
-		}
+		return User::newFatalPermissionDeniedStatus( $action )->getErrorsArray()[0];
 	}
 
 	/**
@@ -2592,6 +2692,29 @@ class Title implements LinkTarget {
 	 *   protection, or false if there's none.
 	 */
 	public function getTitleProtection() {
+		$protection = $this->getTitleProtectionInternal();
+		if ( $protection ) {
+			if ( $protection['permission'] == 'sysop' ) {
+				$protection['permission'] = 'editprotected'; // B/C
+			}
+			if ( $protection['permission'] == 'autoconfirmed' ) {
+				$protection['permission'] = 'editsemiprotected'; // B/C
+			}
+		}
+		return $protection;
+	}
+
+	/**
+	 * Fetch title protection settings
+	 *
+	 * To work correctly, $this->loadRestrictions() needs to have access to the
+	 * actual protections in the database without munging 'sysop' =>
+	 * 'editprotected' and 'autoconfirmed' => 'editsemiprotected'. Other
+	 * callers probably want $this->getTitleProtection() instead.
+	 *
+	 * @return array|bool
+	 */
+	protected function getTitleProtectionInternal() {
 		// Can't protect pages in special namespaces
 		if ( $this->getNamespace() < 0 ) {
 			return false;
@@ -2604,30 +2727,33 @@ class Title implements LinkTarget {
 
 		if ( $this->mTitleProtection === null ) {
 			$dbr = wfGetDB( DB_REPLICA );
+			$commentStore = new CommentStore( 'pt_reason' );
+			$commentQuery = $commentStore->getJoin();
 			$res = $dbr->select(
-				'protected_titles',
+				[ 'protected_titles' ] + $commentQuery['tables'],
 				[
 					'user' => 'pt_user',
-					'reason' => 'pt_reason',
 					'expiry' => 'pt_expiry',
 					'permission' => 'pt_create_perm'
-				],
+				] + $commentQuery['fields'],
 				[ 'pt_namespace' => $this->getNamespace(), 'pt_title' => $this->getDBkey() ],
-				__METHOD__
+				__METHOD__,
+				[],
+				$commentQuery['joins']
 			);
 
 			// fetchRow returns false if there are no rows.
 			$row = $dbr->fetchRow( $res );
 			if ( $row ) {
-				if ( $row['permission'] == 'sysop' ) {
-					$row['permission'] = 'editprotected'; // B/C
-				}
-				if ( $row['permission'] == 'autoconfirmed' ) {
-					$row['permission'] = 'editsemiprotected'; // B/C
-				}
-				$row['expiry'] = $dbr->decodeExpiry( $row['expiry'] );
+				$this->mTitleProtection = [
+					'user' => $row['user'],
+					'expiry' => $dbr->decodeExpiry( $row['expiry'] ),
+					'permission' => $row['permission'],
+					'reason' => $commentStore->getComment( $row )->text,
+				];
+			} else {
+				$this->mTitleProtection = false;
 			}
-			$this->mTitleProtection = $row;
 		}
 		return $this->mTitleProtection;
 	}
@@ -2811,7 +2937,7 @@ class Title implements LinkTarget {
 					$page_id = $row->pr_page;
 					$page_ns = $row->page_namespace;
 					$page_title = $row->page_title;
-					$sources[$page_id] = Title::makeTitle( $page_ns, $page_title );
+					$sources[$page_id] = self::makeTitle( $page_ns, $page_title );
 					# Add groups needed for each restriction type if its not already there
 					# Make sure this restriction type still exists
 
@@ -2964,14 +3090,11 @@ class Title implements LinkTarget {
 
 			# Cycle through all the restrictions.
 			foreach ( $rows as $row ) {
-
 				// Don't take care of restrictions types that aren't allowed
 				if ( !in_array( $row->pr_type, $restrictionTypes ) ) {
 					continue;
 				}
 
-				// This code should be refactored, now that it's being used more generally,
-				// But I don't really see any harm in leaving it in Block for now -werdna
 				$expiry = $dbr->decodeExpiry( $row->pr_expiry );
 
 				// Only apply the restrictions if they haven't expired!
@@ -3023,7 +3146,7 @@ class Title implements LinkTarget {
 
 			$this->loadRestrictionsFromRows( $rows, $oldFashionedRestrictions );
 		} else {
-			$title_protection = $this->getTitleProtection();
+			$title_protection = $this->getTitleProtectionInternal();
 
 			if ( $title_protection ) {
 				$now = wfTimestampNow();
@@ -3139,7 +3262,7 @@ class Title implements LinkTarget {
 		if ( $limit > -1 ) {
 			$options['LIMIT'] = $limit;
 		}
-		$this->mSubpages = TitleArray::newFromResult(
+		return TitleArray::newFromResult(
 			$dbr->select( 'page',
 				[ 'page_id', 'page_namespace', 'page_title', 'page_is_redirect' ],
 				$conds,
@@ -3147,7 +3270,6 @@ class Title implements LinkTarget {
 				$options
 			)
 		);
-		return $this->mSubpages;
 	}
 
 	/**
@@ -3296,7 +3418,7 @@ class Title implements LinkTarget {
 	 * @return int Int or 0 if the page doesn't exist
 	 */
 	public function getLatestRevID( $flags = 0 ) {
-		if ( !( $flags & Title::GAID_FOR_UPDATE ) && $this->mLatestID !== false ) {
+		if ( !( $flags & self::GAID_FOR_UPDATE ) && $this->mLatestID !== false ) {
 			return intval( $this->mLatestID );
 		}
 		if ( !$this->getArticleID( $flags ) ) {
@@ -3415,7 +3537,7 @@ class Title implements LinkTarget {
 		$this->mTextform = strtr( $this->mDbkeyform, '_', ' ' );
 
 		# We already know that some pages won't be in the database!
-		if ( $this->isExternal() || $this->mNamespace == NS_SPECIAL ) {
+		if ( $this->isExternal() || $this->isSpecialPage() ) {
 			$this->mArticleID = 0;
 		}
 
@@ -3456,7 +3578,7 @@ class Title implements LinkTarget {
 		if ( $res->numRows() ) {
 			$linkCache = LinkCache::singleton();
 			foreach ( $res as $row ) {
-				$titleObj = Title::makeTitle( $row->page_namespace, $row->page_title );
+				$titleObj = self::makeTitle( $row->page_namespace, $row->page_title );
 				if ( $titleObj ) {
 					$linkCache->addGoodLinkObjFromRow( $titleObj, $row );
 					$retVal[] = $titleObj;
@@ -3524,9 +3646,9 @@ class Title implements LinkTarget {
 		$linkCache = LinkCache::singleton();
 		foreach ( $res as $row ) {
 			if ( $row->page_id ) {
-				$titleObj = Title::newFromRow( $row );
+				$titleObj = self::newFromRow( $row );
 			} else {
-				$titleObj = Title::makeTitle( $row->$blNamespace, $row->$blTitle );
+				$titleObj = self::makeTitle( $row->$blNamespace, $row->$blTitle );
 				$linkCache->addBadLinkObj( $titleObj );
 			}
 			$retVal[] = $titleObj;
@@ -3582,7 +3704,7 @@ class Title implements LinkTarget {
 
 		$retVal = [];
 		foreach ( $res as $row ) {
-			$retVal[] = Title::makeTitle( $row->pl_namespace, $row->pl_title );
+			$retVal[] = self::makeTitle( $row->pl_namespace, $row->pl_title );
 		}
 		return $retVal;
 	}
@@ -3636,23 +3758,11 @@ class Title implements LinkTarget {
 	}
 
 	/**
-	 * Move this page without authentication
-	 *
-	 * @deprecated since 1.25 use MovePage class instead
-	 * @param Title $nt The new page Title
-	 * @return array|bool True on success, getUserPermissionsErrors()-like array on failure
-	 */
-	public function moveNoAuth( &$nt ) {
-		wfDeprecated( __METHOD__, '1.25' );
-		return $this->moveTo( $nt, false );
-	}
-
-	/**
 	 * Check whether a given move operation would be valid.
 	 * Returns true if ok, or a getUserPermissionsErrors()-like array otherwise
 	 *
 	 * @deprecated since 1.25, use MovePage's methods instead
-	 * @param Title $nt The new title
+	 * @param Title &$nt The new title
 	 * @param bool $auth Whether to check user permissions (uses $wgUser)
 	 * @param string $reason Is the log summary of the move, used for spam checking
 	 * @return array|bool True on success, getUserPermissionsErrors()-like array on failure
@@ -3704,15 +3814,18 @@ class Title implements LinkTarget {
 	 * Move a title to a new location
 	 *
 	 * @deprecated since 1.25, use the MovePage class instead
-	 * @param Title $nt The new title
+	 * @param Title &$nt The new title
 	 * @param bool $auth Indicates whether $wgUser's permissions
 	 *  should be checked
 	 * @param string $reason The reason for the move
 	 * @param bool $createRedirect Whether to create a redirect from the old title to the new title.
 	 *  Ignored if the user doesn't have the suppressredirect right.
+	 * @param array $changeTags Applied to the entry in the move log and redirect page revision
 	 * @return array|bool True on success, getUserPermissionsErrors()-like array on failure
 	 */
-	public function moveTo( &$nt, $auth = true, $reason = '', $createRedirect = true ) {
+	public function moveTo( &$nt, $auth = true, $reason = '', $createRedirect = true,
+		array $changeTags = []
+	) {
 		global $wgUser;
 		$err = $this->isValidMoveOperation( $nt, $auth, $reason );
 		if ( is_array( $err ) ) {
@@ -3726,7 +3839,7 @@ class Title implements LinkTarget {
 		}
 
 		$mp = new MovePage( $this, $nt );
-		$status = $mp->move( $wgUser, $reason, $createRedirect );
+		$status = $mp->move( $wgUser, $reason, $createRedirect, $changeTags );
 		if ( $status->isOK() ) {
 			return true;
 		} else {
@@ -3742,24 +3855,32 @@ class Title implements LinkTarget {
 	 * @param string $reason The reason for the move
 	 * @param bool $createRedirect Whether to create redirects from the old subpages to
 	 *     the new ones Ignored if the user doesn't have the 'suppressredirect' right
+	 * @param array $changeTags Applied to the entry in the move log and redirect page revision
 	 * @return array Array with old page titles as keys, and strings (new page titles) or
-	 *     arrays (errors) as values, or an error array with numeric indices if no pages
-	 *     were moved
+	 *     getUserPermissionsErrors()-like arrays (errors) as values, or a
+	 *     getUserPermissionsErrors()-like error array with numeric indices if
+	 *     no pages were moved
 	 */
-	public function moveSubpages( $nt, $auth = true, $reason = '', $createRedirect = true ) {
+	public function moveSubpages( $nt, $auth = true, $reason = '', $createRedirect = true,
+		array $changeTags = []
+	) {
 		global $wgMaximumMovedPages;
 		// Check permissions
 		if ( !$this->userCan( 'move-subpages' ) ) {
-			return [ 'cant-move-subpages' ];
+			return [
+				[ 'cant-move-subpages' ],
+			];
 		}
 		// Do the source and target namespaces support subpages?
 		if ( !MWNamespace::hasSubpages( $this->getNamespace() ) ) {
-			return [ 'namespace-nosubpages',
-				MWNamespace::getCanonicalName( $this->getNamespace() ) ];
+			return [
+				[ 'namespace-nosubpages', MWNamespace::getCanonicalName( $this->getNamespace() ) ],
+			];
 		}
 		if ( !MWNamespace::hasSubpages( $nt->getNamespace() ) ) {
-			return [ 'namespace-nosubpages',
-				MWNamespace::getCanonicalName( $nt->getNamespace() ) ];
+			return [
+				[ 'namespace-nosubpages', MWNamespace::getCanonicalName( $nt->getNamespace() ) ],
+			];
 		}
 
 		$subpages = $this->getSubpages( $wgMaximumMovedPages + 1 );
@@ -3768,9 +3889,9 @@ class Title implements LinkTarget {
 		foreach ( $subpages as $oldSubpage ) {
 			$count++;
 			if ( $count > $wgMaximumMovedPages ) {
-				$retval[$oldSubpage->getPrefixedText()] =
-						[ 'movepage-max-pages',
-							$wgMaximumMovedPages ];
+				$retval[$oldSubpage->getPrefixedText()] = [
+					[ 'movepage-max-pages', $wgMaximumMovedPages ],
+				];
 				break;
 			}
 
@@ -3786,18 +3907,18 @@ class Title implements LinkTarget {
 			}
 			$newPageName = preg_replace(
 					'#^' . preg_quote( $this->getDBkey(), '#' ) . '#',
-					StringUtils::escapeRegexReplacement( $nt->getDBkey() ), # bug 21234
+					StringUtils::escapeRegexReplacement( $nt->getDBkey() ), # T23234
 					$oldSubpage->getDBkey() );
 			if ( $oldSubpage->isTalkPage() ) {
 				$newNs = $nt->getTalkPage()->getNamespace();
 			} else {
 				$newNs = $nt->getSubjectPage()->getNamespace();
 			}
-			# Bug 14385: we need makeTitleSafe because the new page names may
+			# T16385: we need makeTitleSafe because the new page names may
 			# be longer than 255 characters.
-			$newSubpage = Title::makeTitleSafe( $newNs, $newPageName );
+			$newSubpage = self::makeTitleSafe( $newNs, $newPageName );
 
-			$success = $oldSubpage->moveTo( $newSubpage, $auth, $reason, $createRedirect );
+			$success = $oldSubpage->moveTo( $newSubpage, $auth, $reason, $createRedirect, $changeTags );
 			if ( $success === true ) {
 				$retval[$oldSubpage->getPrefixedText()] = $newSubpage->getPrefixedText();
 			} else {
@@ -3910,7 +4031,7 @@ class Title implements LinkTarget {
 	 * categories' names.
 	 *
 	 * @return array Array of parents in the form:
-	 *	  $parent => $currentarticle
+	 *     $parent => $currentarticle
 	 */
 	public function getParentCategories() {
 		global $wgContLang;
@@ -3957,7 +4078,7 @@ class Title implements LinkTarget {
 					# Circular reference
 					$stack[$parent] = [];
 				} else {
-					$nt = Title::newFromText( $parent );
+					$nt = self::newFromText( $parent );
 					if ( $nt ) {
 						$stack[$parent] = $nt->getParentCategoryTree( $children + [ $parent => 1 ] );
 					}
@@ -3984,21 +4105,52 @@ class Title implements LinkTarget {
 	}
 
 	/**
-	 * Get the revision ID of the previous revision
-	 *
+	 * Get next/previous revision ID relative to another revision ID
 	 * @param int $revId Revision ID. Get the revision that was before this one.
 	 * @param int $flags Title::GAID_FOR_UPDATE
-	 * @return int|bool Old revision ID, or false if none exists
+	 * @param string $dir 'next' or 'prev'
+	 * @return int|bool New revision ID, or false if none exists
 	 */
-	public function getPreviousRevisionID( $revId, $flags = 0 ) {
-		$db = ( $flags & self::GAID_FOR_UPDATE ) ? wfGetDB( DB_MASTER ) : wfGetDB( DB_REPLICA );
+	private function getRelativeRevisionID( $revId, $flags, $dir ) {
+		$revId = (int)$revId;
+		if ( $dir === 'next' ) {
+			$op = '>';
+			$sort = 'ASC';
+		} elseif ( $dir === 'prev' ) {
+			$op = '<';
+			$sort = 'DESC';
+		} else {
+			throw new InvalidArgumentException( '$dir must be "next" or "prev"' );
+		}
+
+		if ( $flags & self::GAID_FOR_UPDATE ) {
+			$db = wfGetDB( DB_MASTER );
+		} else {
+			$db = wfGetDB( DB_REPLICA, 'contributions' );
+		}
+
+		// Intentionally not caring if the specified revision belongs to this
+		// page. We only care about the timestamp.
+		$ts = $db->selectField( 'revision', 'rev_timestamp', [ 'rev_id' => $revId ], __METHOD__ );
+		if ( $ts === false ) {
+			$ts = $db->selectField( 'archive', 'ar_timestamp', [ 'ar_rev_id' => $revId ], __METHOD__ );
+			if ( $ts === false ) {
+				// Or should this throw an InvalidArgumentException or something?
+				return false;
+			}
+		}
+		$ts = $db->addQuotes( $ts );
+
 		$revId = $db->selectField( 'revision', 'rev_id',
 			[
 				'rev_page' => $this->getArticleID( $flags ),
-				'rev_id < ' . intval( $revId )
+				"rev_timestamp $op $ts OR (rev_timestamp = $ts AND rev_id $op $revId)"
 			],
 			__METHOD__,
-			[ 'ORDER BY' => 'rev_id DESC' ]
+			[
+				'ORDER BY' => "rev_timestamp $sort, rev_id $sort",
+				'IGNORE INDEX' => 'rev_timestamp', // Probably needed for T159319
+			]
 		);
 
 		if ( $revId === false ) {
@@ -4009,6 +4161,17 @@ class Title implements LinkTarget {
 	}
 
 	/**
+	 * Get the revision ID of the previous revision
+	 *
+	 * @param int $revId Revision ID. Get the revision that was before this one.
+	 * @param int $flags Title::GAID_FOR_UPDATE
+	 * @return int|bool Old revision ID, or false if none exists
+	 */
+	public function getPreviousRevisionID( $revId, $flags = 0 ) {
+		return $this->getRelativeRevisionID( $revId, $flags, 'prev' );
+	}
+
+	/**
 	 * Get the revision ID of the next revision
 	 *
 	 * @param int $revId Revision ID. Get the revision that was after this one.
@@ -4016,21 +4179,7 @@ class Title implements LinkTarget {
 	 * @return int|bool Next revision ID, or false if none exists
 	 */
 	public function getNextRevisionID( $revId, $flags = 0 ) {
-		$db = ( $flags & self::GAID_FOR_UPDATE ) ? wfGetDB( DB_MASTER ) : wfGetDB( DB_REPLICA );
-		$revId = $db->selectField( 'revision', 'rev_id',
-			[
-				'rev_page' => $this->getArticleID( $flags ),
-				'rev_id > ' . intval( $revId )
-			],
-			__METHOD__,
-			[ 'ORDER BY' => 'rev_id' ]
-		);
-
-		if ( $revId === false ) {
-			return false;
-		} else {
-			return intval( $revId );
-		}
+		return $this->getRelativeRevisionID( $revId, $flags, 'next' );
 	}
 
 	/**
@@ -4046,7 +4195,10 @@ class Title implements LinkTarget {
 			$row = $db->selectRow( 'revision', Revision::selectFields(),
 				[ 'rev_page' => $pageId ],
 				__METHOD__,
-				[ 'ORDER BY' => 'rev_timestamp ASC', 'LIMIT' => 1 ]
+				[
+					'ORDER BY' => 'rev_timestamp ASC, rev_id ASC',
+					'IGNORE INDEX' => 'rev_timestamp', // See T159319
+				]
 			);
 			if ( $row ) {
 				return new Revision( $row );
@@ -4476,7 +4628,7 @@ class Title implements LinkTarget {
 	 * Get the last touched timestamp
 	 *
 	 * @param IDatabase $db Optional db
-	 * @return string Last-touched timestamp
+	 * @return string|false Last-touched timestamp
 	 */
 	public function getTouched( $db = null ) {
 		if ( $db === null ) {
@@ -4626,7 +4778,7 @@ class Title implements LinkTarget {
 	}
 
 	/**
-	 * Whether the magic words __INDEX__ and __NOINDEX__ function for  this page.
+	 * Whether the magic words __INDEX__ and __NOINDEX__ function for this page.
 	 *
 	 * @return bool
 	 */
@@ -4638,7 +4790,6 @@ class Title implements LinkTarget {
 			: $wgExemptFromUserRobotsControl;
 
 		return !in_array( $this->mNamespace, $bannedNamespaces );
-
 	}
 
 	/**

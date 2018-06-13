@@ -19,8 +19,13 @@
  *
  * @file
  */
+
+use Wikimedia\Rdbms\Database;
+use Wikimedia\Rdbms\IDatabase;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\MediaWikiServices;
+use Wikimedia\Rdbms\ResultWrapper;
+use Wikimedia\Rdbms\FakeResultWrapper;
 
 /**
  * @todo document
@@ -87,6 +92,7 @@ class Revision implements IDBAccessObject {
 	const DELETED_USER = 4;
 	const DELETED_RESTRICTED = 8;
 	const SUPPRESSED_USER = 12; // convenience
+	const SUPPRESSED_ALL = 15; // convenience
 
 	// Audience options for accessors
 	const FOR_PUBLIC = 1;
@@ -186,7 +192,9 @@ class Revision implements IDBAccessObject {
 		$attribs = $overrides + [
 			'page'       => isset( $row->ar_page_id ) ? $row->ar_page_id : null,
 			'id'         => isset( $row->ar_rev_id ) ? $row->ar_rev_id : null,
-			'comment'    => $row->ar_comment,
+			'comment'    => CommentStore::newKey( 'ar_comment' )
+				// Legacy because $row probably came from self::selectArchiveFields()
+				->getCommentLegacy( wfGetDB( DB_REPLICA ), $row, true )->text,
 			'user'       => $row->ar_user,
 			'user_text'  => $row->ar_user_text,
 			'timestamp'  => $row->ar_timestamp,
@@ -215,7 +223,7 @@ class Revision implements IDBAccessObject {
 			// Pre-1.5 ar_text row
 			$attribs['text'] = self::getRevisionText( $row, 'ar_' );
 			if ( $attribs['text'] === false ) {
-				throw new MWException( 'Unable to load text from archive row (possibly bug 22624)' );
+				throw new MWException( 'Unable to load text from archive row (possibly T24624)' );
 			}
 		}
 		return new self( $attribs );
@@ -354,7 +362,7 @@ class Revision implements IDBAccessObject {
 		$row = self::fetchFromConds( $db, $conditions, $flags );
 		if ( $row ) {
 			$rev = new Revision( $row );
-			$rev->mWiki = $db->getWikiID();
+			$rev->mWiki = $db->getDomainID();
 
 			return $rev;
 		}
@@ -437,6 +445,8 @@ class Revision implements IDBAccessObject {
 	/**
 	 * Return the list of revision fields that should be selected to create
 	 * a new revision.
+	 * @todo Deprecate this in favor of a method that returns tables and joins
+	 *  as well, and use CommentStore::getJoin().
 	 * @return array
 	 */
 	public static function selectFields() {
@@ -447,7 +457,6 @@ class Revision implements IDBAccessObject {
 			'rev_page',
 			'rev_text_id',
 			'rev_timestamp',
-			'rev_comment',
 			'rev_user_text',
 			'rev_user',
 			'rev_minor_edit',
@@ -456,6 +465,8 @@ class Revision implements IDBAccessObject {
 			'rev_parent_id',
 			'rev_sha1',
 		];
+
+		$fields += CommentStore::newKey( 'rev_comment' )->getFields();
 
 		if ( $wgContentHandlerUseDB ) {
 			$fields[] = 'rev_content_format';
@@ -468,6 +479,8 @@ class Revision implements IDBAccessObject {
 	/**
 	 * Return the list of revision fields that should be selected to create
 	 * a new revision from an archive row.
+	 * @todo Deprecate this in favor of a method that returns tables and joins
+	 *  as well, and use CommentStore::getJoin().
 	 * @return array
 	 */
 	public static function selectArchiveFields() {
@@ -479,7 +492,6 @@ class Revision implements IDBAccessObject {
 			'ar_text',
 			'ar_text_id',
 			'ar_timestamp',
-			'ar_comment',
 			'ar_user_text',
 			'ar_user',
 			'ar_minor_edit',
@@ -488,6 +500,8 @@ class Revision implements IDBAccessObject {
 			'ar_parent_id',
 			'ar_sha1',
 		];
+
+		$fields += CommentStore::newKey( 'ar_comment' )->getFields();
 
 		if ( $wgContentHandlerUseDB ) {
 			$fields[] = 'ar_content_format';
@@ -553,8 +567,6 @@ class Revision implements IDBAccessObject {
 	}
 
 	/**
-	 * Constructor
-	 *
 	 * @param object|array $row Either a database row or an array
 	 * @throws MWException
 	 * @access private
@@ -564,7 +576,9 @@ class Revision implements IDBAccessObject {
 			$this->mId = intval( $row->rev_id );
 			$this->mPage = intval( $row->rev_page );
 			$this->mTextId = intval( $row->rev_text_id );
-			$this->mComment = $row->rev_comment;
+			$this->mComment = CommentStore::newKey( 'rev_comment' )
+				// Legacy because $row probably came from self::selectFields()
+				->getCommentLegacy( wfGetDB( DB_REPLICA ), $row, true )->text;
 			$this->mUser = intval( $row->rev_user );
 			$this->mMinorEdit = intval( $row->rev_minor_edit );
 			$this->mTimestamp = $row->rev_timestamp;
@@ -748,7 +762,7 @@ class Revision implements IDBAccessObject {
 	 * This should only be used for proposed revisions that turn out to be null edits
 	 *
 	 * @since 1.28
-	 * @param integer $id User ID
+	 * @param int $id User ID
 	 * @param string $name User name
 	 */
 	public function setUserIdAndName( $id, $name ) {
@@ -856,7 +870,7 @@ class Revision implements IDBAccessObject {
 	 *   Revision::FOR_PUBLIC       to be displayed to all users
 	 *   Revision::FOR_THIS_USER    to be displayed to the given user
 	 *   Revision::RAW              get the ID regardless of permissions
-	 * @param User $user User object to check for, only if FOR_THIS_USER is passed
+	 * @param User|null $user User object to check for, only if FOR_THIS_USER is passed
 	 *   to the $audience parameter
 	 * @return int
 	 */
@@ -873,7 +887,7 @@ class Revision implements IDBAccessObject {
 	/**
 	 * Fetch revision's user id without regard for the current user's permissions
 	 *
-	 * @return string
+	 * @return int
 	 * @deprecated since 1.25, use getUser( Revision::RAW )
 	 */
 	public function getRawUser() {
@@ -890,7 +904,7 @@ class Revision implements IDBAccessObject {
 	 *   Revision::FOR_PUBLIC       to be displayed to all users
 	 *   Revision::FOR_THIS_USER    to be displayed to the given user
 	 *   Revision::RAW              get the text regardless of permissions
-	 * @param User $user User object to check for, only if FOR_THIS_USER is passed
+	 * @param User|null $user User object to check for, only if FOR_THIS_USER is passed
 	 *   to the $audience parameter
 	 * @return string
 	 */
@@ -934,7 +948,7 @@ class Revision implements IDBAccessObject {
 	 *   Revision::FOR_PUBLIC       to be displayed to all users
 	 *   Revision::FOR_THIS_USER    to be displayed to the given user
 	 *   Revision::RAW              get the text regardless of permissions
-	 * @param User $user User object to check for, only if FOR_THIS_USER is passed
+	 * @param User|null $user User object to check for, only if FOR_THIS_USER is passed
 	 *   to the $audience parameter
 	 * @return string
 	 */
@@ -998,7 +1012,7 @@ class Revision implements IDBAccessObject {
 
 		return RecentChange::newFromConds(
 			[
-				'rc_user_text' => $this->getUserText( Revision::RAW ),
+				'rc_user_text' => $this->getUserText( self::RAW ),
 				'rc_timestamp' => $dbr->timestamp( $this->getTimestamp() ),
 				'rc_this_oldid' => $this->getId()
 			],
@@ -1032,28 +1046,6 @@ class Revision implements IDBAccessObject {
 		$this->loadMutableFields();
 
 		return (int)$this->mDeleted;
-	}
-
-	/**
-	 * Fetch revision text if it's available to the specified audience.
-	 * If the specified audience does not have the ability to view this
-	 * revision, an empty string will be returned.
-	 *
-	 * @param int $audience One of:
-	 *   Revision::FOR_PUBLIC       to be displayed to all users
-	 *   Revision::FOR_THIS_USER    to be displayed to the given user
-	 *   Revision::RAW              get the text regardless of permissions
-	 * @param User $user User object to check for, only if FOR_THIS_USER is passed
-	 *   to the $audience parameter
-	 *
-	 * @deprecated since 1.21, use getContent() instead
-	 * @return string
-	 */
-	public function getText( $audience = self::FOR_PUBLIC, User $user = null ) {
-		wfDeprecated( __METHOD__, '1.21' );
-
-		$content = $this->getContent( $audience, $user );
-		return ContentHandler::getContentText( $content ); # returns the raw content text, if applicable
 	}
 
 	/**
@@ -1130,7 +1122,7 @@ class Revision implements IDBAccessObject {
 	 *
 	 * @return string The content model id associated with this revision,
 	 *     see the CONTENT_MODEL_XXX constants.
-	 **/
+	 */
 	public function getContentModel() {
 		if ( !$this->mContentModel ) {
 			$title = $this->getTitle();
@@ -1154,7 +1146,7 @@ class Revision implements IDBAccessObject {
 	 *
 	 * @return string The content format id associated with this revision,
 	 *     see the CONTENT_FORMAT_XXX constants.
-	 **/
+	 */
 	public function getContentFormat() {
 		if ( !$this->mContentFormat ) {
 			$handler = $this->getContentHandler();
@@ -1259,8 +1251,9 @@ class Revision implements IDBAccessObject {
 
 	/**
 	 * Get revision text associated with an old or archive row
-	 * $row is usually an object from wfFetchRow(), both the flags and the text
-	 * field must be included.
+	 *
+	 * Both the flags and the text field must be included. Including the old_id
+	 * field will activate cache usage as long as the $wiki parameter is not set.
 	 *
 	 * @param stdClass $row The text data
 	 * @param string $prefix Table prefix (default 'old_')
@@ -1268,11 +1261,9 @@ class Revision implements IDBAccessObject {
 	 *   (same as the the wiki $row was loaded from) or false to indicate the local
 	 *   wiki (this is the default). Otherwise, it must be a symbolic wiki database
 	 *   identifier as understood by the LoadBalancer class.
-	 * @return string Text the text requested or false on failure
+	 * @return string|false Text the text requested or false on failure
 	 */
 	public static function getRevisionText( $row, $prefix = 'old_', $wiki = false ) {
-
-		# Get data
 		$textField = $prefix . 'text';
 		$flagsField = $prefix . 'flags';
 
@@ -1288,21 +1279,35 @@ class Revision implements IDBAccessObject {
 			return false;
 		}
 
-		# Use external methods for external objects, text in table is URL-only then
+		// Use external methods for external objects, text in table is URL-only then
 		if ( in_array( 'external', $flags ) ) {
 			$url = $text;
 			$parts = explode( '://', $url, 2 );
 			if ( count( $parts ) == 1 || $parts[1] == '' ) {
 				return false;
 			}
-			$text = ExternalStore::fetchFromURL( $url, [ 'wiki' => $wiki ] );
+
+			if ( isset( $row->old_id ) && $wiki === false ) {
+				// Make use of the wiki-local revision text cache
+				$cache = MediaWikiServices::getInstance()->getMainWANObjectCache();
+				// The cached value should be decompressed, so handle that and return here
+				return $cache->getWithSetCallback(
+					$cache->makeKey( 'revisiontext', 'textid', $row->old_id ),
+					self::getCacheTTL( $cache ),
+					function () use ( $url, $wiki, $flags ) {
+						// No negative caching per Revision::loadText()
+						$text = ExternalStore::fetchFromURL( $url, [ 'wiki' => $wiki ] );
+
+						return self::decompressRevisionText( $text, $flags );
+					},
+					[ 'pcGroup' => self::TEXT_CACHE_GROUP, 'pcTTL' => $cache::TTL_PROC_LONG ]
+				);
+			} else {
+				$text = ExternalStore::fetchFromURL( $url, [ 'wiki' => $wiki ] );
+			}
 		}
 
-		// If the text was fetched without an error, convert it
-		if ( $text !== false ) {
-			$text = self::decompressRevisionText( $text, $flags );
-		}
-		return $text;
+		return self::decompressRevisionText( $text, $flags );
 	}
 
 	/**
@@ -1312,7 +1317,7 @@ class Revision implements IDBAccessObject {
 	 * data is compressed, and 'utf-8' if we're saving in UTF-8
 	 * mode.
 	 *
-	 * @param mixed $text Reference to a text
+	 * @param mixed &$text Reference to a text
 	 * @return string
 	 */
 	public static function compressRevisionText( &$text ) {
@@ -1348,6 +1353,13 @@ class Revision implements IDBAccessObject {
 	 * @return string|bool Decompressed text, or false on failure
 	 */
 	public static function decompressRevisionText( $text, $flags ) {
+		global $wgLegacyEncoding, $wgContLang;
+
+		if ( $text === false ) {
+			// Text failed to be fetched; nothing to do
+			return false;
+		}
+
 		if ( in_array( 'gzip', $flags ) ) {
 			# Deal with optional compression of archived pages.
 			# This can be done periodically via maintenance/compressOld.php, and
@@ -1370,7 +1382,6 @@ class Revision implements IDBAccessObject {
 			$text = $obj->getText();
 		}
 
-		global $wgLegacyEncoding;
 		if ( $text !== false && $wgLegacyEncoding
 			&& !in_array( 'utf-8', $flags ) && !in_array( 'utf8', $flags )
 		) {
@@ -1378,7 +1389,6 @@ class Revision implements IDBAccessObject {
 			# Upconvert on demand.
 			# ("utf8" checked for compatibility with some broken
 			#  conversion scripts 2008-12-30)
-			global $wgContLang;
 			$text = $wgContLang->iconv( $wgLegacyEncoding, 'UTF-8', $text );
 		}
 
@@ -1391,7 +1401,7 @@ class Revision implements IDBAccessObject {
 	 *
 	 * @param IDatabase $dbw (master connection)
 	 * @throws MWException
-	 * @return int
+	 * @return int The revision ID
 	 */
 	public function insertOn( $dbw ) {
 		global $wgDefaultExternalStore, $wgContentHandlerUseDB;
@@ -1432,10 +1442,8 @@ class Revision implements IDBAccessObject {
 
 		# Record the text (or external storage URL) to the text table
 		if ( $this->mTextId === null ) {
-			$old_id = $dbw->nextSequenceValue( 'text_old_id_seq' );
 			$dbw->insert( 'text',
 				[
-					'old_id' => $old_id,
 					'old_text' => $data,
 					'old_flags' => $flags,
 				], __METHOD__
@@ -1448,14 +1456,9 @@ class Revision implements IDBAccessObject {
 		}
 
 		# Record the edit in revisions
-		$rev_id = $this->mId !== null
-			? $this->mId
-			: $dbw->nextSequenceValue( 'revision_rev_id_seq' );
 		$row = [
-			'rev_id'         => $rev_id,
 			'rev_page'       => $this->mPage,
 			'rev_text_id'    => $this->mTextId,
-			'rev_comment'    => $this->mComment,
 			'rev_minor_edit' => $this->mMinorEdit ? 1 : 0,
 			'rev_user'       => $this->mUser,
 			'rev_user_text'  => $this->mUserText,
@@ -1466,9 +1469,16 @@ class Revision implements IDBAccessObject {
 				? $this->getPreviousRevisionId( $dbw )
 				: $this->mParentId,
 			'rev_sha1'       => $this->mSha1 === null
-				? Revision::base36Sha1( $this->mText )
+				? self::base36Sha1( $this->mText )
 				: $this->mSha1,
 		];
+		if ( $this->mId !== null ) {
+			$row['rev_id'] = $this->mId;
+		}
+
+		list( $commentFields, $commentCallback ) =
+			CommentStore::newKey( 'rev_comment' )->insertWithTempTable( $dbw, $this->mComment );
+		$row += $commentFields;
 
 		if ( $wgContentHandlerUseDB ) {
 			// NOTE: Store null for the default model and format, to save space.
@@ -1494,7 +1504,11 @@ class Revision implements IDBAccessObject {
 
 		$dbw->insert( 'revision', $row, __METHOD__ );
 
-		$this->mId = $rev_id !== null ? $rev_id : $dbw->insertId();
+		if ( $this->mId === null ) {
+			// Only if auto-increment was used
+			$this->mId = $dbw->insertId();
+		}
+		$commentCallback( $this->mId );
 
 		// Assertion to try to catch T92046
 		if ( (int)$this->mId === 0 ) {
@@ -1504,7 +1518,19 @@ class Revision implements IDBAccessObject {
 			);
 		}
 
-		Hooks::run( 'RevisionInsertComplete', [ &$this, $data, $flags ] );
+		// Insert IP revision into ip_changes for use when querying for a range.
+		if ( $this->mUser === 0 && IP::isValid( $this->mUserText ) ) {
+			$ipcRow = [
+				'ipc_rev_id'        => $this->mId,
+				'ipc_rev_timestamp' => $row['rev_timestamp'],
+				'ipc_hex'           => IP::toHex( $row['rev_user_text'] ),
+			];
+			$dbw->insert( 'ip_changes', $ipcRow, __METHOD__ );
+		}
+
+		// Avoid PHP 7.1 warning of passing $this by reference
+		$revision = $this;
+		Hooks::run( 'RevisionInsertComplete', [ &$revision, $data, $flags ] );
 
 		return $this->mId;
 	}
@@ -1550,7 +1576,7 @@ class Revision implements IDBAccessObject {
 			}
 		}
 
-		$content = $this->getContent( Revision::RAW );
+		$content = $this->getContent( self::RAW );
 		$prefixedDBkey = $title->getPrefixedDBkey();
 		$revId = $this->mId;
 
@@ -1576,15 +1602,14 @@ class Revision implements IDBAccessObject {
 	}
 
 	/**
-	 * Lazy-load the revision's text.
-	 * Currently hardcoded to the 'text' table storage engine.
+	 * Get the text cache TTL
 	 *
-	 * @return string|bool The revision's text, or false on failure
+	 * @param WANObjectCache $cache
+	 * @return int
 	 */
-	private function loadText() {
+	private static function getCacheTTL( WANObjectCache $cache ) {
 		global $wgRevisionCacheExpiry;
 
-		$cache = ObjectCache::getMainWANInstance();
 		if ( $cache->getQoS( $cache::ATTR_EMULATION ) <= $cache::QOS_EMULATION_SQL ) {
 			// Do not cache RDBMs blobs in...the RDBMs store
 			$ttl = $cache::TTL_UNCACHEABLE;
@@ -1592,10 +1617,22 @@ class Revision implements IDBAccessObject {
 			$ttl = $wgRevisionCacheExpiry ?: $cache::TTL_UNCACHEABLE;
 		}
 
+		return $ttl;
+	}
+
+	/**
+	 * Lazy-load the revision's text.
+	 * Currently hardcoded to the 'text' table storage engine.
+	 *
+	 * @return string|bool The revision's text, or false on failure
+	 */
+	private function loadText() {
+		$cache = ObjectCache::getMainWANInstance();
+
 		// No negative caching; negative hits on text rows may be due to corrupted replica DBs
 		return $cache->getWithSetCallback(
 			$cache->makeKey( 'revisiontext', 'textid', $this->getTextId() ),
-			$ttl,
+			self::getCacheTTL( $cache ),
 			function () {
 				return $this->fetchText();
 			},
@@ -1676,7 +1713,7 @@ class Revision implements IDBAccessObject {
 	 * @return Revision|null Revision or null on error
 	 */
 	public static function newNullRevision( $dbw, $pageId, $summary, $minor, $user = null ) {
-		global $wgContentHandlerUseDB, $wgContLang;
+		global $wgContentHandlerUseDB;
 
 		$fields = [ 'page_latest', 'page_namespace', 'page_title',
 						'rev_text_id', 'rev_len', 'rev_sha1' ];
@@ -1702,9 +1739,6 @@ class Revision implements IDBAccessObject {
 				global $wgUser;
 				$user = $wgUser;
 			}
-
-			// Truncate for whole multibyte characters
-			$summary = $wgContLang->truncate( $summary, 255 );
 
 			$row = [
 				'page'       => $pageId,
@@ -1800,6 +1834,7 @@ class Revision implements IDBAccessObject {
 	 *
 	 * @param Title $title
 	 * @param int $id
+	 * @param int $flags
 	 * @return string|bool False if not found
 	 */
 	static function getTimestampFromId( $title, $id, $flags = 0 ) {
@@ -1906,7 +1941,7 @@ class Revision implements IDBAccessObject {
 		$cache = MediaWikiServices::getInstance()->getMainWANObjectCache();
 		return $cache->getWithSetCallback(
 			// Page/rev IDs passed in from DB to reflect history merges
-			$cache->makeGlobalKey( 'revision', $db->getWikiID(), $pageId, $revId ),
+			$cache->makeGlobalKey( 'revision', $db->getDomainID(), $pageId, $revId ),
 			$cache::TTL_WEEK,
 			function ( $curValue, &$ttl, array &$setOpts ) use ( $db, $pageId, $revId ) {
 				$setOpts += Database::getCacheSetOptions( $db );

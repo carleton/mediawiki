@@ -6,8 +6,6 @@
  * @author Moriel Schottlender, 2015
  * @since 1.19
  */
-/*jshint esversion:5 */
-/*global OO*/
 ( function ( mw, $ ) {
 	/**
 	 * This is a way of getting simple feedback from users. It's useful
@@ -238,12 +236,10 @@
 			classes: [ 'mw-feedbackDialog-welcome-message' ]
 		} );
 		this.feedbackSubjectInput = new OO.ui.TextInputWidget( {
-			indicator: 'required',
-			multiline: false
+			indicator: 'required'
 		} );
-		this.feedbackMessageInput = new OO.ui.TextInputWidget( {
-			autosize: true,
-			multiline: true
+		this.feedbackMessageInput = new OO.ui.MultilineTextInputWidget( {
+			autosize: true
 		} );
 		feedbackSubjectFieldLayout = new OO.ui.FieldLayout( this.feedbackSubjectInput, {
 			label: mw.msg( 'feedback-subject' )
@@ -289,14 +285,14 @@
 	 */
 	mw.Feedback.Dialog.prototype.validateFeedbackForm = function () {
 		var isValid = (
-				(
-					!this.useragentMandatory ||
-					this.useragentCheckbox.isSelected()
-				) &&
-				this.feedbackSubjectInput.getValue()
-			);
+			(
+				!this.useragentMandatory ||
+				this.useragentCheckbox.isSelected()
+			) &&
+			this.feedbackSubjectInput.getValue()
+		);
 
-		this.actions.setAbilities( { submit:  isValid } );
+		this.actions.setAbilities( { submit: isValid } );
 	};
 
 	/**
@@ -458,10 +454,10 @@
 				if ( secondaryCode === 'http' ) {
 					fb.status = 'error3';
 					// ajax request failed
-					mw.log.warn( 'Feedback report failed with HTTP error: ' +  details.textStatus );
+					mw.log.warn( 'Feedback report failed with HTTP error: ' + details.textStatus );
 				} else {
 					fb.status = 'error2';
-					mw.log.warn( 'Feedback report failed with API error: ' +  secondaryCode );
+					mw.log.warn( 'Feedback report failed with API error: ' + secondaryCode );
 				}
 			} else {
 				fb.status = 'error1';

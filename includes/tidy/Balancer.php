@@ -75,7 +75,7 @@ class BalanceSets {
 		self::HTML_NAMESPACE => [
 			'html' => true, 'head' => true, 'body' => true, 'frameset' => true,
 			'frame' => true,
-			'plaintext' => true, 'isindex' => true,
+			'plaintext' => true,
 			'xmp' => true, 'iframe' => true, 'noembed' => true,
 			'noscript' => true, 'script' => true,
 			'title' => true
@@ -119,9 +119,9 @@ class BalanceSets {
 			'h2' => true, 'h3' => true, 'h4' => true, 'h5' => true,
 			'h6' => true, 'head' => true, 'header' => true, 'hgroup' => true,
 			'hr' => true, 'html' => true, 'iframe' => true, 'img' => true,
-			'input' => true, 'isindex' => true, 'li' => true, 'link' => true,
+			'input' => true, 'li' => true, 'link' => true,
 			'listing' => true, 'main' => true, 'marquee' => true,
-			'menu' => true, 'menuitem' => true, 'meta' => true, 'nav' => true,
+			'menu' => true, 'meta' => true, 'nav' => true,
 			'noembed' => true, 'noframes' => true, 'noscript' => true,
 			'object' => true, 'ol' => true, 'p' => true, 'param' => true,
 			'plaintext' => true, 'pre' => true, 'script' => true,
@@ -156,7 +156,8 @@ class BalanceSets {
 
 	public static $impliedEndTagsSet = [
 		self::HTML_NAMESPACE => [
-			'dd' => true, 'dt' => true, 'li' => true, 'optgroup' => true,
+			'dd' => true, 'dt' => true, 'li' => true,
+			'menuitem' => true, 'optgroup' => true,
 			'option' => true, 'p' => true, 'rb' => true, 'rp' => true,
 			'rt' => true, 'rtc' => true
 		]
@@ -498,6 +499,16 @@ class BalanceElement {
 					$this->attribs = [ 'class' => "mw-empty-elt" ];
 				}
 				$blank = false;
+			} elseif (
+				$this->isA( BalanceSets::$extraLinefeedSet ) &&
+				count( $this->children ) > 0 &&
+				substr( $this->children[0], 0, 1 ) == "\n"
+			) {
+				// Double the linefeed after pre/listing/textarea
+				// according to the (old) HTML5 fragment serialization
+				// algorithm (see https://github.com/whatwg/html/issues/944)
+				// to ensure this will round-trip.
+				array_unshift( $this->children, "\n" );
 			}
 			$flat = $blank ? '' : "{$this}";
 		} else {
@@ -529,15 +540,6 @@ class BalanceElement {
 				$out .= "{$elt}";
 			}
 			$out .= "</{$this->localName}>";
-			if (
-				$this->isA( BalanceSets::$extraLinefeedSet ) &&
-				$out[$len] === "\n"
-			) {
-				// Double the linefeed after pre/listing/textarea
-				// according to the HTML5 fragment serialization algorithm.
-				$out = substr( $out, 0, $len + 1 ) .
-					substr( $out, $len );
-			}
 		} else {
 			$out = "<{$this->localName}{$encAttribs} />";
 			Assert::invariant(
@@ -625,6 +627,7 @@ class BalanceElement {
 
 	/**
 	 * Get a string key for the Noah's Ark algorithm
+	 * @return string
 	 */
 	public function getNoahKey() {
 		if ( $this->noahKey === null ) {
@@ -708,6 +711,7 @@ class BalanceStack implements IteratorAggregate {
 	/**
 	 * Insert a comment at the appropriate place for inserting a node.
 	 * @param string $value Content of the comment.
+	 * @return string
 	 * @see https://html.spec.whatwg.org/multipage/syntax.html#insert-a-comment
 	 */
 	public function insertComment( $value ) {
@@ -719,6 +723,7 @@ class BalanceStack implements IteratorAggregate {
 	 * Insert text at the appropriate place for inserting a node.
 	 * @param string $value
 	 * @param bool $isComment
+	 * @return string
 	 * @see https://html.spec.whatwg.org/multipage/syntax.html#appropriate-place-for-inserting-a-node
 	 */
 	public function insertText( $value, $isComment = false ) {
@@ -899,6 +904,8 @@ class BalanceStack implements IteratorAggregate {
 
 	/**
 	 * Return the adjusted current node.
+	 * @param string $fragmentContext
+	 * @return string
 	 */
 	public function adjustedCurrentNode( $fragmentContext ) {
 		return ( $fragmentContext && count( $this->elements ) === 1 ) ?
@@ -1201,7 +1208,7 @@ class BalanceStack implements IteratorAggregate {
 			$furthestBlock = null;
 			$furthestBlockIndex = -1;
 			$stackLength = $this->length();
-			for ( $i = $index+1; $i < $stackLength; $i++ ) {
+			for ( $i = $index + 1; $i < $stackLength; $i++ ) {
 				if ( $this->node( $i )->isA( BalanceSets::$specialSet ) ) {
 					$furthestBlock = $this->node( $i );
 					$furthestBlockIndex = $i;
@@ -1223,7 +1230,7 @@ class BalanceStack implements IteratorAggregate {
 
 			// Let the common ancestor be the element immediately above
 			// the formatting element in the stack of open elements.
-			$ancestor = $this->node( $index-1 );
+			$ancestor = $this->node( $index - 1 );
 
 			// Let a bookmark note the position of the formatting
 			// element in the list of active formatting elements
@@ -1410,6 +1417,7 @@ class BalanceActiveFormattingElements {
 	private $noahTableStack = [ [] ];
 
 	public function __destruct() {
+		$next = null;
 		for ( $node = $this->head; $node; $node = $next ) {
 			$next = $node->nextAFE;
 			$node->prevAFE = $node->nextAFE = $node->nextNoah = null;
@@ -1510,6 +1518,8 @@ class BalanceActiveFormattingElements {
 	 * Find and return the last element with the specified tag between the
 	 * end of the list and the last marker on the list.
 	 * Used when parsing &lt;a&gt; "in body mode".
+	 * @param string $tag
+	 * @return null|Node
 	 */
 	public function findElementByTag( $tag ) {
 		$elt = $this->tail;
@@ -1525,7 +1535,7 @@ class BalanceActiveFormattingElements {
 	/**
 	 * Determine whether an element is in the list of formatting elements.
 	 * @param BalanceElement $elt
-	 * @return boolean
+	 * @return bool
 	 */
 	public function isInList( BalanceElement $elt ) {
 		return $this->head === $elt || $elt->prevAFE;
@@ -1769,7 +1779,7 @@ class BalanceActiveFormattingElements {
  *   and escaped.
  * - All null characters are assumed to have been removed.
  * - The following elements are disallowed: <html>, <head>, <body>, <frameset>,
- *   <frame>, <plaintext>, <isindex>, <xmp>, <iframe>,
+ *   <frame>, <plaintext>, <xmp>, <iframe>,
  *   <noembed>, <noscript>, <script>, <title>.  As a result,
  *   further simplifications can be made:
  *   - `frameset-ok` is not tracked.
@@ -1821,7 +1831,7 @@ class Balancer {
 	 * Regex borrowed from Tim Starling's "remex-html" project.
 	 */
 	const VALID_COMMENT_REGEX = "~ !--
-		(                             # 1. Comment match detector
+		(                           # 1. Comment match detector
 			> | -> | # Invalid short close
 			(                         # 2. Comment contents
 				(?:
@@ -1836,15 +1846,15 @@ class Balancer {
 			(                         # 3. Comment close
 				--> |   # Normal close
 				--!> |  # Comment end bang
-				(                     # 4. Indicate matches requiring EOF
-					--! |   # EOF in comment end bang state
-					-- |    # EOF in comment end state
-					-  |    # EOF in comment end dash state
-					        # EOF in comment state
+				(                       # 4. Indicate matches requiring EOF
+					--! |                   # EOF in comment end bang state
+					-- |                    # EOF in comment end state
+					-  |                    # EOF in comment end dash state
+					(?#nothing)             # EOF in comment state
 				)
 			)
 		)
-		([^<]*) \z                    # 5. Non-tag text after the comment
+		([^<]*) \z                  # 5. Non-tag text after the comment
 		~xs";
 
 	/**
@@ -1864,7 +1874,9 @@ class Balancer {
 	 *         provide historical compatibility with the old "tidy"
 	 *         program: <p>-wrapping is done to the children of
 	 *         <body> and <blockquote> elements, and empty elements
-	 *         are removed.
+	 *         are removed.  The <pre>/<listing>/<textarea> serialization
+	 *         is also tweaked to allow lossless round trips.
+	 *         (See: https://github.com/whatwg/html/issues/944)
 	 *     'allowComments': boolean, defaults to true.
 	 *         When true, allows HTML comments in the input.
 	 *         The Sanitizer generally strips all comments, so if you
@@ -1886,7 +1898,7 @@ class Balancer {
 			$bad = array_uintersect_assoc(
 				$this->allowedHtmlElements,
 				BalanceSets::$unsupportedSet[BalanceSets::HTML_NAMESPACE],
-				function( $a, $b ) {
+				function ( $a, $b ) {
 					// Ignore the values (just intersect the keys) by saying
 					// all values are equal to each other.
 					return 0;
@@ -1996,6 +2008,7 @@ class Balancer {
 		// Some hoops we have to jump through
 		$adjusted = $this->stack->adjustedCurrentNode( $this->fragmentContext );
 
+		// The spec calls this the "tree construction dispatcher".
 		$isForeign = true;
 		if (
 			$this->stack->length() === 0 ||
@@ -2035,6 +2048,9 @@ class Balancer {
 	private function insertForeignToken( $token, $value, $attribs = null, $selfClose = false ) {
 		if ( $token === 'text' ) {
 			$this->stack->insertText( $value );
+			return true;
+		} elseif ( $token === 'comment' ) {
+			$this->stack->insertComment( $value );
 			return true;
 		} elseif ( $token === 'tag' ) {
 			switch ( $value ) {
@@ -2107,7 +2123,7 @@ class Balancer {
 				return $this->insertToken( $token, $value, $attribs, $selfClose );
 			}
 			// "Any other start tag"
-			$adjusted = ( $this->fragmentContext && $this->stack->length()===1 ) ?
+			$adjusted = ( $this->fragmentContext && $this->stack->length() === 1 ) ?
 				$this->fragmentContext : $this->stack->currentNode;
 			$this->stack->insertForeignElement(
 				$adjusted->namespaceURI, $value, $attribs
@@ -2147,7 +2163,7 @@ class Balancer {
 		if (
 			$this->allowComments &&
 			!( $this->inRCDATA || $this->inRAWTEXT ) &&
-			preg_match( Balancer::VALID_COMMENT_REGEX, $x, $regs, PREG_OFFSET_CAPTURE ) &&
+			preg_match( self::VALID_COMMENT_REGEX, $x, $regs, PREG_OFFSET_CAPTURE ) &&
 			// verify EOF condition where necessary
 			( $regs[4][1] < 0 || !$this->bitsIterator->valid() )
 		) {
@@ -2233,7 +2249,7 @@ class Balancer {
 
 	private function switchMode( $mode ) {
 		Assert::parameter(
-			substr( $mode, -4 )==='Mode', '$mode', 'should end in Mode'
+			substr( $mode, -4 ) === 'Mode', '$mode', 'should end in Mode'
 		);
 		$oldMode = $this->parseMode;
 		$this->parseMode = $mode;
@@ -2258,8 +2274,8 @@ class Balancer {
 				switch ( $node->localName ) {
 				case 'select':
 					$stackLength = $this->stack->length();
-					for ( $j = $i + 1; $j < $stackLength-1; $j++ ) {
-						$ancestor = $this->stack->node( $stackLength-$j-1 );
+					for ( $j = $i + 1; $j < $stackLength - 1; $j++ ) {
+						$ancestor = $this->stack->node( $stackLength - $j - 1 );
 						if ( $ancestor->isHtmlNamed( 'template' ) ) {
 							break;
 						}
@@ -2467,7 +2483,6 @@ class Balancer {
 			case 'header':
 			case 'hgroup':
 			case 'main':
-			case 'menu':
 			case 'nav':
 			case 'ol':
 			case 'p':
@@ -2476,6 +2491,16 @@ class Balancer {
 			case 'ul':
 				if ( $this->stack->inButtonScope( 'p' ) ) {
 					$this->inBodyMode( 'endtag', 'p' );
+				}
+				$this->stack->insertHTMLElement( $value, $attribs );
+				return true;
+
+			case 'menu':
+				if ( $this->stack->inButtonScope( "p" ) ) {
+					$this->inBodyMode( 'endtag', 'p' );
+				}
+				if ( $this->stack->currentNode->isHtmlNamed( 'menuitem' ) ) {
+					$this->stack->pop();
 				}
 				$this->stack->insertHTMLElement( $value, $attribs );
 				return true;
@@ -2655,7 +2680,6 @@ class Balancer {
 				// (hence we don't need to examine the tag's "type" attribute)
 				return true;
 
-			case 'menuitem':
 			case 'param':
 			case 'source':
 			case 'track':
@@ -2667,6 +2691,9 @@ class Balancer {
 				if ( $this->stack->inButtonScope( 'p' ) ) {
 					$this->inBodyMode( 'endtag', 'p' );
 				}
+				if ( $this->stack->currentNode->isHtmlNamed( 'menuitem' ) ) {
+					$this->stack->pop();
+				}
 				$this->stack->insertHTMLElement( $value, $attribs );
 				$this->stack->pop();
 				return true;
@@ -2674,8 +2701,6 @@ class Balancer {
 			case 'image':
 				// warts!
 				return $this->inBodyMode( $token, 'img', $attribs, $selfClose );
-
-			// OMITTED: <isindex>
 
 			case 'textarea':
 				$this->stack->insertHTMLElement( $value, $attribs );
@@ -2709,6 +2734,14 @@ class Balancer {
 			case 'option':
 				if ( $this->stack->currentNode->isHtmlNamed( 'option' ) ) {
 					$this->inBodyMode( 'endtag', 'option' );
+				}
+				$this->afe->reconstruct( $this->stack );
+				$this->stack->insertHTMLElement( $value, $attribs );
+				return true;
+
+			case 'menuitem':
+				if ( $this->stack->currentNode->isHtmlNamed( 'menuitem' ) ) {
+					$this->stack->pop();
 				}
 				$this->afe->reconstruct( $this->stack );
 				$this->stack->insertHTMLElement( $value, $attribs );

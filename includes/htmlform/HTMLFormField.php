@@ -42,7 +42,7 @@ abstract class HTMLFormField {
 	 *
 	 * @return string Valid HTML.
 	 */
-	abstract function getInputHTML( $value );
+	abstract public function getInputHTML( $value );
 
 	/**
 	 * Same as getInputHTML, but returns an OOUI object.
@@ -51,7 +51,7 @@ abstract class HTMLFormField {
 	 * @param string $value
 	 * @return OOUI\Widget|false
 	 */
-	function getInputOOUI( $value ) {
+	public function getInputOOUI( $value ) {
 		return false;
 	}
 
@@ -74,7 +74,7 @@ abstract class HTMLFormField {
 	 *
 	 * @return Message
 	 */
-	function msg() {
+	public function msg() {
 		$args = func_get_args();
 
 		if ( $this->mParent ) {
@@ -266,7 +266,7 @@ abstract class HTMLFormField {
 	 * @param array $alldata The data collected from the form
 	 * @return bool
 	 */
-	function isHidden( $alldata ) {
+	public function isHidden( $alldata ) {
 		if ( !$this->mHideIf ) {
 			return false;
 		}
@@ -284,7 +284,7 @@ abstract class HTMLFormField {
 	 *
 	 * @return bool True to cancel the submission
 	 */
-	function cancelSubmit( $value, $alldata ) {
+	public function cancelSubmit( $value, $alldata ) {
 		return false;
 	}
 
@@ -296,10 +296,10 @@ abstract class HTMLFormField {
 	 * @param string|array $value The value the field was submitted with
 	 * @param array $alldata The data collected from the form
 	 *
-	 * @return bool|string True on success, or String error to display, or
+	 * @return bool|string|Message True on success, or String/Message error to display, or
 	 *   false to fail validation without displaying an error.
 	 */
-	function validate( $value, $alldata ) {
+	public function validate( $value, $alldata ) {
 		if ( $this->isHidden( $alldata ) ) {
 			return true;
 		}
@@ -308,7 +308,7 @@ abstract class HTMLFormField {
 			&& $this->mParams['required'] !== false
 			&& $value === ''
 		) {
-			return $this->msg( 'htmlform-required' )->parse();
+			return $this->msg( 'htmlform-required' );
 		}
 
 		if ( isset( $this->mValidationCallback ) ) {
@@ -318,7 +318,7 @@ abstract class HTMLFormField {
 		return true;
 	}
 
-	function filter( $value, $alldata ) {
+	public function filter( $value, $alldata ) {
 		if ( isset( $this->mFilterCallback ) ) {
 			$value = call_user_func( $this->mFilterCallback, $value, $alldata, $this->mParent );
 		}
@@ -357,7 +357,7 @@ abstract class HTMLFormField {
 	 * (wpFormIdentifier).
 	 *
 	 * @param WebRequest $request
-	 * @return boolean
+	 * @return bool
 	 */
 	protected function isSubmitAttempt( WebRequest $request ) {
 		return $request->getCheck( 'wpEditToken' ) || $request->getCheck( 'wpFormIdentifier' );
@@ -370,7 +370,7 @@ abstract class HTMLFormField {
 	 * @param WebRequest $request
 	 * @return string The value
 	 */
-	function loadDataFromRequest( $request ) {
+	public function loadDataFromRequest( $request ) {
 		if ( $request->getCheck( $this->mName ) ) {
 			return $request->getText( $this->mName );
 		} else {
@@ -386,7 +386,7 @@ abstract class HTMLFormField {
 	 * @since 1.22 The 'label' attribute no longer accepts raw HTML, use 'label-raw' instead
 	 * @throws MWException
 	 */
-	function __construct( $params ) {
+	public function __construct( $params ) {
 		$this->mParams = $params;
 
 		if ( isset( $params['parent'] ) && $params['parent'] instanceof HTMLForm ) {
@@ -416,8 +416,8 @@ abstract class HTMLFormField {
 			$this->mDir = $params['dir'];
 		}
 
-		$validName = Sanitizer::escapeId( $this->mName );
-		$validName = str_replace( [ '.5B', '.5D' ], [ '[', ']' ], $validName );
+		$validName = urlencode( $this->mName );
+		$validName = str_replace( [ '%5B', '%5D' ], [ '[', ']' ], $validName );
 		if ( $this->mName != $validName && !isset( $params['nodata'] ) ) {
 			throw new MWException( "Invalid name '{$this->mName}' passed to " . __METHOD__ );
 		}
@@ -430,7 +430,7 @@ abstract class HTMLFormField {
 
 		if ( isset( $params['id'] ) ) {
 			$id = $params['id'];
-			$validId = Sanitizer::escapeId( $id );
+			$validId = urlencode( $id );
 
 			if ( $id != $validId ) {
 				throw new MWException( "Invalid id '$id' passed to " . __METHOD__ );
@@ -472,10 +472,10 @@ abstract class HTMLFormField {
 	 *
 	 * @return string Complete HTML table row.
 	 */
-	function getTableRow( $value ) {
+	public function getTableRow( $value ) {
 		list( $errors, $errorClass ) = $this->getErrorsAndErrorClass( $value );
 		$inputHtml = $this->getInputHTML( $value );
-		$fieldType = get_class( $this );
+		$fieldType = static::class;
 		$helptext = $this->getHelpTextHtmlTable( $this->getHelpText() );
 		$cellAttributes = [];
 		$rowAttributes = [];
@@ -533,7 +533,7 @@ abstract class HTMLFormField {
 	public function getDiv( $value ) {
 		list( $errors, $errorClass ) = $this->getErrorsAndErrorClass( $value );
 		$inputHtml = $this->getInputHTML( $value );
-		$fieldType = get_class( $this );
+		$fieldType = static::class;
 		$helptext = $this->getHelpTextHtmlDiv( $this->getHelpText() );
 		$cellAttributes = [];
 		$label = $this->getLabelHtml( $cellAttributes );
@@ -601,7 +601,7 @@ abstract class HTMLFormField {
 			$infusable = false;
 		}
 
-		$fieldType = get_class( $this );
+		$fieldType = static::class;
 		$help = $this->getHelpText();
 		$errors = $this->getErrorsRaw( $value );
 		foreach ( $errors as &$error ) {
@@ -660,6 +660,8 @@ abstract class HTMLFormField {
 
 	/**
 	 * Get a FieldLayout (or subclass thereof) to wrap this field in when using OOUI output.
+	 * @param string $inputField
+	 * @param array $config
 	 * @return OOUI\FieldLayout|OOUI\ActionFieldLayout
 	 */
 	protected function getFieldLayoutOOUI( $inputField, $config ) {
@@ -903,7 +905,7 @@ abstract class HTMLFormField {
 	 * @since 1.28
 	 * @return string[]
 	 */
-	function getNotices() {
+	public function getNotices() {
 		$notices = [];
 
 		if ( isset( $this->mParams['notice-message'] ) ) {
@@ -924,11 +926,11 @@ abstract class HTMLFormField {
 	/**
 	 * @return string HTML
 	 */
-	function getLabel() {
+	public function getLabel() {
 		return is_null( $this->mLabel ) ? '' : $this->mLabel;
 	}
 
-	function getLabelHtml( $cellAttributes = [] ) {
+	public function getLabelHtml( $cellAttributes = [] ) {
 		# Don't output a for= attribute for labels with no associated input.
 		# Kind of hacky here, possibly we don't want these to be <label>s at all.
 		$for = [];
@@ -967,7 +969,7 @@ abstract class HTMLFormField {
 		return $html;
 	}
 
-	function getDefault() {
+	public function getDefault() {
 		if ( isset( $this->mDefault ) ) {
 			return $this->mDefault;
 		} else {
@@ -976,7 +978,7 @@ abstract class HTMLFormField {
 	}
 
 	/**
-	 * Returns the attributes required for the tooltip and accesskey.
+	 * Returns the attributes required for the tooltip and accesskey, for Html::element() etc.
 	 *
 	 * @return array Attributes
 	 */
@@ -986,6 +988,22 @@ abstract class HTMLFormField {
 		}
 
 		return Linker::tooltipAndAccesskeyAttribs( $this->mParams['tooltip'] );
+	}
+
+	/**
+	 * Returns the attributes required for the tooltip and accesskey, for OOUI widgets' config.
+	 *
+	 * @return array Attributes
+	 */
+	public function getTooltipAndAccessKeyOOUI() {
+		if ( empty( $this->mParams['tooltip'] ) ) {
+			return [];
+		}
+
+		return [
+			'title' => Linker::titleAttrib( $this->mParams['tooltip'] ),
+			'accessKey' => Linker::accesskey( $this->mParams['tooltip'] ),
+		];
 	}
 
 	/**
@@ -1034,9 +1052,9 @@ abstract class HTMLFormField {
 	 * with integer 0 as a value.
 	 *
 	 * @param array $array
-	 * @return array
+	 * @return array|string
 	 */
-	static function forceToStringRecursive( $array ) {
+	public static function forceToStringRecursive( $array ) {
 		if ( is_array( $array ) ) {
 			return array_map( [ __CLASS__, 'forceToStringRecursive' ], $array );
 		} else {
@@ -1058,33 +1076,8 @@ abstract class HTMLFormField {
 				$this->mOptionsLabelsNotFromMessage = true;
 				$this->mOptions = self::forceToStringRecursive( $this->mParams['options'] );
 			} elseif ( array_key_exists( 'options-message', $this->mParams ) ) {
-				/** @todo This is copied from Xml::listDropDown(), deprecate/avoid duplication? */
 				$message = $this->getMessage( $this->mParams['options-message'] )->inContentLanguage()->plain();
-
-				$optgroup = false;
-				$this->mOptions = [];
-				foreach ( explode( "\n", $message ) as $option ) {
-					$value = trim( $option );
-					if ( $value == '' ) {
-						continue;
-					} elseif ( substr( $value, 0, 1 ) == '*' && substr( $value, 1, 1 ) != '*' ) {
-						# A new group is starting...
-						$value = trim( substr( $value, 1 ) );
-						$optgroup = $value;
-					} elseif ( substr( $value, 0, 2 ) == '**' ) {
-						# groupmember
-						$opt = trim( substr( $value, 2 ) );
-						if ( $optgroup === false ) {
-							$this->mOptions[$opt] = $opt;
-						} else {
-							$this->mOptions[$optgroup][$opt] = $opt;
-						}
-					} else {
-						# groupless reason list
-						$optgroup = false;
-						$this->mOptions[$option] = $option;
-					}
-				}
+				$this->mOptions = Xml::listDropDownOptions( $message );
 			} else {
 				$this->mOptions = null;
 			}
@@ -1104,16 +1097,7 @@ abstract class HTMLFormField {
 			return null;
 		}
 
-		$options = [];
-
-		foreach ( $oldoptions as $text => $data ) {
-			$options[] = [
-				'data' => (string)$data,
-				'label' => (string)$text,
-			];
-		}
-
-		return $options;
+		return Xml::listDropDownOptionsOoui( $oldoptions );
 	}
 
 	/**
@@ -1145,6 +1129,9 @@ abstract class HTMLFormField {
 	 * @since 1.18
 	 */
 	protected static function formatErrors( $errors ) {
+		// Note: If you change the logic in this method, change
+		// htmlform.Checker.js to match.
+
 		if ( is_array( $errors ) && count( $errors ) === 1 ) {
 			$errors = array_shift( $errors );
 		}
@@ -1193,5 +1180,20 @@ abstract class HTMLFormField {
 	 */
 	public function skipLoadData( $request ) {
 		return !empty( $this->mParams['nodata'] );
+	}
+
+	/**
+	 * Whether this field requires the user agent to have JavaScript enabled for the client-side HTML5
+	 * form validation to work correctly.
+	 *
+	 * @return bool
+	 * @since 1.29
+	 */
+	public function needsJSForHtml5FormValidation() {
+		if ( $this->mHideIf ) {
+			// This is probably more restrictive than it needs to be, but better safe than sorry
+			return true;
+		}
+		return false;
 	}
 }

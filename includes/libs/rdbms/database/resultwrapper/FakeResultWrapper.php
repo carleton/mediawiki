@@ -1,10 +1,15 @@
 <?php
+
+namespace Wikimedia\Rdbms;
+
+use stdClass;
+
 /**
  * Overloads the relevant methods of the real ResultsWrapper so it
  * doesn't go anywhere near an actual database.
  */
 class FakeResultWrapper extends ResultWrapper {
-	/** @var $result stdClass[] */
+	/** @var stdClass[] $result */
 
 	/**
 	 * @param stdClass[] $rows
@@ -56,3 +61,5 @@ class FakeResultWrapper extends ResultWrapper {
 		return $this->fetchObject();
 	}
 }
+
+class_alias( FakeResultWrapper::class, 'FakeResultWrapper' );

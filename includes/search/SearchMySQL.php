@@ -45,7 +45,7 @@ class SearchMySQL extends SearchDatabase {
 	function parseQuery( $filteredText, $fulltext ) {
 		global $wgContLang;
 
-		$lc = $this->legalSearchChars(); // Minus format chars
+		$lc = $this->legalSearchChars( self::CHARS_NO_SYNTAX ); // Minus syntax chars (" and *)
 		$searchon = '';
 		$this->searchTerms = [];
 
@@ -149,8 +149,13 @@ class SearchMySQL extends SearchDatabase {
 		return $regex;
 	}
 
-	public static function legalSearchChars() {
-		return "\"*" . parent::legalSearchChars();
+	public static function legalSearchChars( $type = self::CHARS_ALL ) {
+		$searchChars = parent::legalSearchChars( $type );
+		if ( $type === self::CHARS_ALL ) {
+			// " for phrase, * for wildcard
+			$searchChars = "\"*" . $searchChars;
+		}
+		return $searchChars;
 	}
 
 	/**
@@ -213,7 +218,7 @@ class SearchMySQL extends SearchDatabase {
 
 	/**
 	 * Add special conditions
-	 * @param array $query
+	 * @param array &$query
 	 * @since 1.18
 	 */
 	protected function queryFeatures( &$query ) {
@@ -226,7 +231,7 @@ class SearchMySQL extends SearchDatabase {
 
 	/**
 	 * Add namespace conditions
-	 * @param array $query
+	 * @param array &$query
 	 * @since 1.18 (changed)
 	 */
 	function queryNamespaces( &$query ) {
@@ -240,7 +245,7 @@ class SearchMySQL extends SearchDatabase {
 
 	/**
 	 * Add limit options
-	 * @param array $query
+	 * @param array &$query
 	 * @since 1.18
 	 */
 	protected function limitResult( &$query ) {

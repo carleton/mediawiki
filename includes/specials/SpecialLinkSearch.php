@@ -22,6 +22,9 @@
  * @author Brion Vibber
  */
 
+use Wikimedia\Rdbms\ResultWrapper;
+use Wikimedia\Rdbms\IDatabase;
+
 /**
  * Special:LinkSearch to search the external-links table.
  * @ingroup SpecialPage
@@ -225,16 +228,7 @@ class LinkSearchPage extends QueryPage {
 	 * @param ResultWrapper $res
 	 */
 	function preprocessResults( $db, $res ) {
-		if ( $res->numRows() > 0 ) {
-			$linkBatch = new LinkBatch();
-
-			foreach ( $res as $row ) {
-				$linkBatch->add( $row->namespace, $row->title );
-			}
-
-			$res->seek( 0 );
-			$linkBatch->execute();
-		}
+		$this->executeLBFromResultWrapper( $res );
 	}
 
 	/**
@@ -272,6 +266,7 @@ class LinkSearchPage extends QueryPage {
 	 *
 	 * @see T130058
 	 * @todo FIXME This special page should not use LIMIT for paging
+	 * @return int
 	 */
 	protected function getMaxResults() {
 		return max( parent::getMaxResults(), 60000 );

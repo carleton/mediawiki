@@ -32,6 +32,7 @@ class SearchHighlighter {
 	/**
 	 * @warning If you pass false to this constructor, then
 	 *  the caller is responsible for HTML escaping.
+	 * @param bool $cleanupWikitext
 	 */
 	function __construct( $cleanupWikitext = true ) {
 		$this->mCleanWikitext = $cleanupWikitext;
@@ -79,10 +80,10 @@ class SearchHighlighter {
 			if ( preg_match( $spat, $text, $matches, PREG_OFFSET_CAPTURE, $start ) ) {
 				$epat = '';
 				foreach ( $matches as $key => $val ) {
-					if ( $key > 0 && $val[1] != - 1 ) {
+					if ( $key > 0 && $val[1] != -1 ) {
 						if ( $key == 2 ) {
 							// see if this is an image link
-							$ns = substr( $val[0], 2, - 1 );
+							$ns = substr( $val[0], 2, -1 );
 							if ( $wgContLang->getNsIndex( $ns ) != NS_FILE ) {
 								break;
 							}
@@ -256,10 +257,10 @@ class SearchHighlighter {
 
 		// $snippets = array_map( 'htmlspecialchars', $extended );
 		$snippets = $extended;
-		$last = - 1;
+		$last = -1;
 		$extract = '';
 		foreach ( $snippets as $index => $line ) {
-			if ( $last == - 1 ) {
+			if ( $last == -1 ) {
 				$extract .= $line; // first line
 			} elseif ( $last + 1 == $index
 				&& $offsets[$last] + strlen( $snippets[$last] ) >= strlen( $all[$last] )
@@ -291,8 +292,8 @@ class SearchHighlighter {
 	/**
 	 * Split text into lines and add it to extracts array
 	 *
-	 * @param array $extracts Index -> $line
-	 * @param int $count
+	 * @param array &$extracts Index -> $line
+	 * @param int &$count
 	 * @param string $text
 	 */
 	function splitAndAdd( &$extracts, &$count, $text ) {
@@ -326,8 +327,8 @@ class SearchHighlighter {
 	 * @param string $text
 	 * @param int $start
 	 * @param int $end
-	 * @param int $posStart (out) actual start position
-	 * @param int $posEnd (out) actual end position
+	 * @param int &$posStart (out) actual start position
+	 * @param int &$posEnd (out) actual end position
 	 * @return string
 	 */
 	function extract( $text, $start, $end, &$posStart = null, &$posEnd = null ) {
@@ -397,10 +398,10 @@ class SearchHighlighter {
 	 *
 	 * @param string $pattern Regexp for matching lines
 	 * @param array $extracts Extracts to search
-	 * @param int $linesleft Number of extracts to make
-	 * @param int $contextchars Length of snippet
-	 * @param array $out Map for highlighted snippets
-	 * @param array $offsets Map of starting points of snippets
+	 * @param int &$linesleft Number of extracts to make
+	 * @param int &$contextchars Length of snippet
+	 * @param array &$out Map for highlighted snippets
+	 * @param array &$offsets Map of starting points of snippets
 	 * @protected
 	 */
 	function process( $pattern, $extracts, &$linesleft, &$contextchars, &$out, &$offsets ) {

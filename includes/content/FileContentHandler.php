@@ -6,7 +6,7 @@
  * but instead manually called by WikitextHandler.
  * This should be fixed in the future.
  */
-class FileContentHandler extends WikitextContentHandler  {
+class FileContentHandler extends WikitextContentHandler {
 
 	public function getFieldsForSearchIndex( SearchEngine $engine ) {
 		$fields['file_media_type'] =
@@ -30,8 +30,11 @@ class FileContentHandler extends WikitextContentHandler  {
 		return $fields;
 	}
 
-	public function getDataForSearchIndex( WikiPage $page, ParserOutput $parserOutput,
-	                                       SearchEngine $engine ) {
+	public function getDataForSearchIndex(
+		WikiPage $page,
+		ParserOutput $parserOutput,
+		SearchEngine $engine
+	) {
 		$fields = [];
 
 		$title = $page->getTitle();

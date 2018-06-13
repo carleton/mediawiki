@@ -140,9 +140,6 @@ class GenerateSitemap extends Maintenance {
 	 */
 	private $identifier;
 
-	/**
-	 * Constructor
-	 */
 	public function __construct() {
 		parent::__construct();
 		$this->addDescription( 'Creates a sitemap for the site' );
@@ -195,7 +192,7 @@ class GenerateSitemap extends Maintenance {
 		}
 		$this->identifier = $this->getOption( 'identifier', wfWikiID() );
 		$this->compress = $this->getOption( 'compress', 'yes' ) !== 'no';
-		$this->skipRedirects = $this->getOption( 'skip-redirects', false ) !== false;
+		$this->skipRedirects = $this->hasOption( 'skip-redirects' );
 		$this->dbr = $this->getDB( DB_REPLICA );
 		$this->generateNamespaces();
 		$this->timestamp = wfTimestamp( TS_ISO_8601, wfTimestampNow() );
@@ -413,7 +410,7 @@ class GenerateSitemap extends Maintenance {
 	/**
 	 * gzwrite() / fwrite() wrapper
 	 *
-	 * @param resource $handle
+	 * @param resource &$handle
 	 * @param string $str
 	 */
 	function write( &$handle, $str ) {
@@ -430,7 +427,7 @@ class GenerateSitemap extends Maintenance {
 	/**
 	 * gzclose() / fclose() wrapper
 	 *
-	 * @param resource $handle
+	 * @param resource &$handle
 	 */
 	function close( &$handle ) {
 		if ( $this->compress ) {
@@ -523,7 +520,7 @@ class GenerateSitemap extends Maintenance {
 	function fileEntry( $url, $date, $priority ) {
 		return
 			"\t<url>\n" .
-			// bug 34666: $url may contain bad characters such as ampersands.
+			// T36666: $url may contain bad characters such as ampersands.
 			"\t\t<loc>" . htmlspecialchars( $url ) . "</loc>\n" .
 			"\t\t<lastmod>$date</lastmod>\n" .
 			"\t\t<priority>$priority</priority>\n" .
@@ -545,7 +542,7 @@ class GenerateSitemap extends Maintenance {
 	 * @param int $namespace
 	 */
 	function generateLimit( $namespace ) {
-		// bug 17961: make a title with the longest possible URL in this namespace
+		// T19961: make a title with the longest possible URL in this namespace
 		$title = Title::makeTitle( $namespace, str_repeat( "\xf0\xa8\xae\x81", 63 ) . "\xe5\x96\x83" );
 
 		$this->limit = [

@@ -264,18 +264,16 @@ class LinkHolderArray {
 	/**
 	 * Replace <!--LINK--> link placeholders with actual links, in the buffer
 	 *
-	 * @param string $text
+	 * @param string &$text
 	 */
 	public function replace( &$text ) {
-
 		$this->replaceInternal( $text );
 		$this->replaceInterwiki( $text );
-
 	}
 
 	/**
 	 * Replace internal links
-	 * @param string $text
+	 * @param string &$text
 	 */
 	protected function replaceInternal( &$text ) {
 		if ( !$this->internals ) {
@@ -414,12 +412,11 @@ class LinkHolderArray {
 			$replacer->cb(),
 			$text
 		);
-
 	}
 
 	/**
 	 * Replace interwiki links
-	 * @param string $text
+	 * @param string &$text
 	 */
 	protected function replaceInterwiki( &$text ) {
 		if ( empty( $this->interwikis ) ) {
@@ -447,7 +444,7 @@ class LinkHolderArray {
 
 	/**
 	 * Modify $this->internals and $colours according to language variant linking rules
-	 * @param array $colours
+	 * @param array &$colours
 	 */
 	protected function doVariants( &$colours ) {
 		global $wgContLang;
@@ -614,7 +611,6 @@ class LinkHolderArray {
 	 * @return string
 	 */
 	public function replaceText( $text ) {
-
 		$text = preg_replace_callback(
 			'/<!--(LINK|IWLINK) (.*?)-->/',
 			[ $this, 'replaceTextCallback' ],

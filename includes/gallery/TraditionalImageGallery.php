@@ -174,15 +174,20 @@ class TraditionalImageGallery extends ImageGalleryBase {
 			// ":{$ut}" );
 			// $ul = Linker::link( $linkTarget, $ut );
 
-			if ( $this->mShowBytes ) {
-				if ( $img ) {
-					$fileSize = htmlspecialchars( $lang->formatSize( $img->getSize() ) );
-				} else {
-					$fileSize = $this->msg( 'filemissing' )->escaped();
+			$meta = [];
+			if ( $img ) {
+				if ( $this->mShowDimensions ) {
+					$meta[] = $img->getDimensionsString();
 				}
-				$fileSize = "$fileSize<br />\n";
-			} else {
-				$fileSize = '';
+				if ( $this->mShowBytes ) {
+					$meta[] = htmlspecialchars( $lang->formatSize( $img->getSize() ) );
+				}
+			} elseif ( $this->mShowDimensions || $this->mShowBytes ) {
+				$meta[] = $this->msg( 'filemissing' )->escaped();
+			}
+			$meta = $lang->semicolonList( $meta );
+			if ( $meta ) {
+				$meta .= "<br />\n";
 			}
 
 			$textlink = $this->mShowFilename ?
@@ -201,7 +206,7 @@ class TraditionalImageGallery extends ImageGalleryBase {
 				) . "\n" :
 				'';
 
-			$galleryText = $textlink . $text . $fileSize;
+			$galleryText = $textlink . $text . $meta;
 			$galleryText = $this->wrapGalleryText( $galleryText, $thumb );
 
 			# Weird double wrapping (the extra div inside the li) needed due to FF2 bug
@@ -343,22 +348,8 @@ class TraditionalImageGallery extends ImageGalleryBase {
 	 *
 	 * Used by a subclass to insert extra high resolution images.
 	 * @param MediaTransformOutput $thumb The thumbnail
-	 * @param array $imageParameters Array of options
+	 * @param array &$imageParameters Array of options
 	 */
 	protected function adjustImageParameters( $thumb, &$imageParameters ) {
-	}
-}
-
-/**
- * Backwards compatibility. This always uses traditional mode
- * if called the old way, for extensions that may expect traditional
- * mode.
- *
- * @deprecated since 1.22 Use ImageGalleryBase::factory instead.
- */
-class ImageGallery extends TraditionalImageGallery {
-	function __construct( $mode = 'traditional' ) {
-		wfDeprecated( __METHOD__, '1.22' );
-		parent::__construct( $mode );
 	}
 }

@@ -26,20 +26,24 @@ class ObjectFactoryTest extends PHPUnit_Framework_TestCase {
 	public function testClosureExpansionDisabled() {
 		$obj = ObjectFactory::getObjectFromSpec( [
 			'class' => 'ObjectFactoryTestFixture',
-			'args' => [ function() {
-				return 'unwrapped';
-			}, ],
+			'args' => [
+				function () {
+					return 'wrapped';
+				},
+				'unwrapped',
+			],
 			'calls' => [
-				'setter' => [ function() {
-					return 'unwrapped';
+				'setter' => [ function () {
+					return 'wrapped';
 				}, ],
 			],
 			'closure_expansion' => false,
 		] );
 		$this->assertInstanceOf( 'Closure', $obj->args[0] );
-		$this->assertSame( 'unwrapped', $obj->args[0]() );
+		$this->assertSame( 'wrapped', $obj->args[0]() );
+		$this->assertSame( 'unwrapped', $obj->args[1] );
 		$this->assertInstanceOf( 'Closure', $obj->setterArgs[0] );
-		$this->assertSame( 'unwrapped', $obj->setterArgs[0]() );
+		$this->assertSame( 'wrapped', $obj->setterArgs[0]() );
 	}
 
 	/**
@@ -49,28 +53,32 @@ class ObjectFactoryTest extends PHPUnit_Framework_TestCase {
 	public function testClosureExpansionEnabled() {
 		$obj = ObjectFactory::getObjectFromSpec( [
 			'class' => 'ObjectFactoryTestFixture',
-			'args' => [ function() {
-				return 'unwrapped';
-			}, ],
+			'args' => [
+				function () {
+					return 'wrapped';
+				},
+				'unwrapped',
+			],
 			'calls' => [
-				'setter' => [ function() {
-					return 'unwrapped';
+				'setter' => [ function () {
+					return 'wrapped';
 				}, ],
 			],
 			'closure_expansion' => true,
 		] );
 		$this->assertInternalType( 'string', $obj->args[0] );
-		$this->assertSame( 'unwrapped', $obj->args[0] );
+		$this->assertSame( 'wrapped', $obj->args[0] );
+		$this->assertSame( 'unwrapped', $obj->args[1] );
 		$this->assertInternalType( 'string', $obj->setterArgs[0] );
-		$this->assertSame( 'unwrapped', $obj->setterArgs[0] );
+		$this->assertSame( 'wrapped', $obj->setterArgs[0] );
 
 		$obj = ObjectFactory::getObjectFromSpec( [
 			'class' => 'ObjectFactoryTestFixture',
-			'args' => [ function() {
+			'args' => [ function () {
 				return 'unwrapped';
 			}, ],
 			'calls' => [
-				'setter' => [ function() {
+				'setter' => [ function () {
 					return 'unwrapped';
 				}, ],
 			],

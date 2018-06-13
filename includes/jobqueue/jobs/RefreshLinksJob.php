@@ -21,6 +21,7 @@
  * @ingroup JobQueue
  */
 use MediaWiki\MediaWikiServices;
+use Wikimedia\Rdbms\DBReplicationWaitError;
 
 /**
  * Job to update link tables for pages
@@ -29,7 +30,7 @@ use MediaWiki\MediaWikiServices;
  *   - a) Recursive jobs to update links for backlink pages for a given title.
  *        These jobs have (recursive:true,table:<table>) set.
  *   - b) Jobs to update links for a set of pages (the job title is ignored).
- *	      These jobs have (pages:(<page ID>:(<namespace>,<title>),...) set.
+ *        These jobs have (pages:(<page ID>:(<namespace>,<title>),...) set.
  *   - c) Jobs to update links for a single page (the job title)
  *        These jobs need no extra fields set.
  *
@@ -38,9 +39,9 @@ use MediaWiki\MediaWikiServices;
 class RefreshLinksJob extends Job {
 	/** @var float Cache parser output when it takes this long to render */
 	const PARSE_THRESHOLD_SEC = 1.0;
-	/** @var integer Lag safety margin when comparing root job times to last-refresh times */
+	/** @var int Lag safety margin when comparing root job times to last-refresh times */
 	const CLOCK_FUDGE = 10;
-	/** @var integer How many seconds to wait for replica DBs to catch up */
+	/** @var int How many seconds to wait for replica DBs to catch up */
 	const LAG_WAIT_TIMEOUT = 15;
 
 	function __construct( Title $title, array $params ) {
@@ -86,7 +87,7 @@ class RefreshLinksJob extends Job {
 			// When the base job branches, wait for the replica DBs to catch up to the master.
 			// From then on, we know that any template changes at the time the base job was
 			// enqueued will be reflected in backlink page parses when the leaf jobs run.
-			if ( !isset( $params['range'] ) ) {
+			if ( !isset( $this->params['range'] ) ) {
 				try {
 					$lbFactory = MediaWikiServices::getInstance()->getDBLoadBalancerFactory();
 					$lbFactory->waitForReplication( [
@@ -112,7 +113,7 @@ class RefreshLinksJob extends Job {
 			JobQueueGroup::singleton()->push( $jobs );
 		// Job to update link tables for a set of titles
 		} elseif ( isset( $this->params['pages'] ) ) {
-			foreach ( $this->params['pages'] as $pageId => $nsAndKey ) {
+			foreach ( $this->params['pages'] as $nsAndKey ) {
 				list( $ns, $dbKey ) = $nsAndKey;
 				$this->runForTitle( Title::makeTitleSafe( $ns, $dbKey ) );
 			}
@@ -206,7 +207,7 @@ class RefreshLinksJob extends Job {
 			if ( $page->getTouched() >= $this->params['rootJobTimestamp'] || $opportunistic ) {
 				// Cache is suspected to be up-to-date. As long as the cache rev ID matches
 				// and it reflects the job's triggering change, then it is usable.
-				$parserOutput = ParserCache::singleton()->getDirty( $page, $parserOptions );
+				$parserOutput = $services->getParserCache()->getDirty( $page, $parserOptions );
 				if ( !$parserOutput
 					|| $parserOutput->getCacheRevisionId() != $revision->getId()
 					|| $parserOutput->getCacheTime() < $skewedTimestamp
@@ -233,7 +234,7 @@ class RefreshLinksJob extends Job {
 				&& $parserOutput->isCacheable()
 			) {
 				$ctime = wfTimestamp( TS_MW, (int)$start ); // cache time
-				ParserCache::singleton()->save(
+				$services->getParserCache()->save(
 					$parserOutput, $page, $parserOptions, $ctime, $revision->getId()
 				);
 			}
@@ -252,7 +253,7 @@ class RefreshLinksJob extends Job {
 		// This avoids snapshot-clearing errors in LinksUpdate::acquirePageLock().
 		$lbFactory->commitAndWaitForReplication( __METHOD__, $ticket );
 
-		foreach ( $updates as $key => $update ) {
+		foreach ( $updates as $update ) {
 			// FIXME: This code probably shouldn't be here?
 			// Needed by things like Echo notifications which need
 			// to know which user caused the links update
@@ -278,6 +279,10 @@ class RefreshLinksJob extends Job {
 
 		InfoAction::invalidateCache( $title );
 
+		// Commit any writes here in case this method is called in a loop.
+		// In that case, the scoped lock will fail to be acquired.
+		$lbFactory->commitAndWaitForReplication( __METHOD__, $ticket );
+
 		return true;
 	}
 
@@ -296,6 +301,12 @@ class RefreshLinksJob extends Job {
 	}
 
 	public function workItemCount() {
-		return isset( $this->params['pages'] ) ? count( $this->params['pages'] ) : 1;
+		if ( !empty( $this->params['recursive'] ) ) {
+			return 0; // nothing actually refreshed
+		} elseif ( isset( $this->params['pages'] ) ) {
+			return count( $this->params['pages'] );
+		}
+
+		return 1; // one title
 	}
 }

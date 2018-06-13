@@ -96,6 +96,7 @@ class SpecialPageFactory {
 		'Block' => 'SpecialBlock',
 		'Unblock' => 'SpecialUnblock',
 		'BlockList' => 'SpecialBlockList',
+		'AutoblockList' => 'SpecialAutoblockList',
 		'ChangePassword' => 'SpecialChangePassword',
 		'BotPasswords' => 'SpecialBotPasswords',
 		'PasswordReset' => 'SpecialPasswordReset',
@@ -185,6 +186,7 @@ class SpecialPageFactory {
 		'Revisiondelete' => 'SpecialRevisionDelete',
 		'RunJobs' => 'SpecialRunJobs',
 		'Specialpages' => 'SpecialSpecialpages',
+		'PageData' => 'SpecialPageData'
 	];
 
 	private static $list;
@@ -232,7 +234,6 @@ class SpecialPageFactory {
 		global $wgPageLanguageUseDB, $wgContentHandlerUseDB;
 
 		if ( !is_array( self::$list ) ) {
-
 			self::$list = self::$coreList;
 
 			if ( !$wgDisableInternalSearch ) {
@@ -347,7 +348,7 @@ class SpecialPageFactory {
 			return [ null, null ];
 		}
 
-		if ( !isset( $bits[1] ) ) { // bug 2087
+		if ( !isset( $bits[1] ) ) { // T4087
 			$par = null;
 		} else {
 			$par = $bits[1];
@@ -457,7 +458,7 @@ class SpecialPageFactory {
 		$pages = [];
 		foreach ( self::getPageList() as $name => $rec ) {
 			$page = self::getPage( $name );
-			if ( $page->isListed() && !$page->isRestricted() ) {
+			if ( $page && $page->isListed() && !$page->isRestricted() ) {
 				$pages[$name] = $page;
 			}
 		}
@@ -480,8 +481,8 @@ class SpecialPageFactory {
 		}
 		foreach ( self::getPageList() as $name => $rec ) {
 			$page = self::getPage( $name );
-			if (
-				$page->isListed()
+			if ( $page
+				&& $page->isListed()
 				&& $page->isRestricted()
 				&& $page->userCanExecute( $user )
 			) {
@@ -500,12 +501,12 @@ class SpecialPageFactory {
 	 * Returns a title object if the page is redirected, false if there was no such special
 	 * page, and true if it was successful.
 	 *
-	 * @param Title $title
-	 * @param IContextSource $context
+	 * @param Title &$title
+	 * @param IContextSource &$context
 	 * @param bool $including Bool output is being captured for use in {{special:whatever}}
 	 * @param LinkRenderer|null $linkRenderer (since 1.28)
 	 *
-	 * @return bool
+	 * @return bool|Title
 	 */
 	public static function executePath( Title &$title, IContextSource &$context, $including = false,
 		LinkRenderer $linkRenderer = null
@@ -513,7 +514,7 @@ class SpecialPageFactory {
 		// @todo FIXME: Redirects broken due to this call
 		$bits = explode( '/', $title->getDBkey(), 2 );
 		$name = $bits[0];
-		if ( !isset( $bits[1] ) ) { // bug 2087
+		if ( !isset( $bits[1] ) ) { // T4087
 			$par = null;
 		} else {
 			$par = $bits[1];

@@ -43,7 +43,8 @@ use MediaWiki\MediaWikiServices;
  * of sending out bulk mails (bcc:user1,user2...) for all these users having the
  * same timeoffset in their preferences.
  *
- * Visit the documentation pages under http://meta.wikipedia.com/Enotif
+ * Visit the documentation pages under
+ * https://www.mediawiki.org/wiki/Help:Watching_pages
  */
 class EmailNotification {
 
@@ -316,7 +317,7 @@ class EmailNotification {
 		$pageTitle = $this->title->getPrefixedText();
 
 		if ( $this->oldid ) {
-			// Always show a link to the diff which triggered the mail. See bug 32210.
+			// Always show a link to the diff which triggered the mail. See T34210.
 			$keys['$NEWPAGE'] = "\n\n" . wfMessage( 'enotif_lastdiff',
 					$this->title->getCanonicalURL( [ 'diff' => 'next', 'oldid' => $this->oldid ] ) )
 					->inContentLanguage()->text();
@@ -342,7 +343,7 @@ class EmailNotification {
 		$keys['$PAGETITLE'] = $this->title->getPrefixedText();
 		$keys['$PAGETITLE_URL'] = $this->title->getCanonicalURL();
 		$keys['$PAGEMINOREDIT'] = $this->minorEdit ?
-			wfMessage( 'minoredit' )->inContentLanguage()->text() : '';
+			wfMessage( 'enotif_minoredit' )->inContentLanguage()->text() : '';
 		$keys['$UNWATCHURL'] = $this->title->getCanonicalURL( 'action=unwatch' );
 
 		if ( $this->editor->isAnon() ) {
@@ -363,7 +364,7 @@ class EmailNotification {
 			Skin::makeInternalOrExternalUrl( wfMessage( 'helppage' )->inContentLanguage()->text() )
 		);
 
-		# Replace this after transforming the message, bug 35019
+		# Replace this after transforming the message, T37019
 		$postTransformKeys['$PAGESUMMARY'] = $this->summary == '' ? ' - ' : $this->summary;
 
 		// Now build message's subject and body

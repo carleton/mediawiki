@@ -20,6 +20,8 @@
  * @file
  * @ingroup Deployment
  */
+use Wikimedia\Rdbms\Database;
+use Wikimedia\Rdbms\IDatabase;
 use MediaWiki\MediaWikiServices;
 
 require_once __DIR__ . '/../../maintenance/Maintenance.php';
@@ -32,8 +34,6 @@ require_once __DIR__ . '/../../maintenance/Maintenance.php';
  * @since 1.17
  */
 abstract class DatabaseUpdater {
-	protected static $updateCounter = 0;
-
 	/**
 	 * Array of updates to perform on the database
 	 *
@@ -61,6 +61,11 @@ abstract class DatabaseUpdater {
 	 */
 	protected $db;
 
+	/**
+	 * @var Maintenance
+	 */
+	protected $maintenance;
+
 	protected $shared = false;
 
 	/**
@@ -78,6 +83,8 @@ abstract class DatabaseUpdater {
 		FixDefaultJsonContentPages::class,
 		CleanupEmptyCategories::class,
 		AddRFCAndPMIDInterwiki::class,
+		PopulatePPSortKey::class,
+		PopulateIpChanges::class,
 	];
 
 	/**
@@ -100,9 +107,7 @@ abstract class DatabaseUpdater {
 	protected $holdContentHandlerUseDB = true;
 
 	/**
-	 * Constructor
-	 *
-	 * @param Database $db To perform updates on
+	 * @param Database &$db To perform updates on
 	 * @param bool $shared Whether to perform updates on shared tables
 	 * @param Maintenance $maintenance Maintenance object which created us
 	 */
@@ -389,7 +394,7 @@ abstract class DatabaseUpdater {
 	 * Writes the schema updates desired to a file for the DB Admin to run.
 	 * @param array $schemaUpdate
 	 */
-	private function writeSchemaUpdateFile( $schemaUpdate = [] ) {
+	private function writeSchemaUpdateFile( array $schemaUpdate = [] ) {
 		$updates = $this->updatesSkipped;
 		$this->updatesSkipped = [];
 
@@ -422,9 +427,7 @@ abstract class DatabaseUpdater {
 	 *
 	 * @param array $what What updates to perform
 	 */
-	public function doUpdates( $what = [ 'core', 'extensions', 'stats' ] ) {
-		global $wgVersion;
-
+	public function doUpdates( array $what = [ 'core', 'extensions', 'stats' ] ) {
 		$this->db->setSchemaVars( $this->getSchemaVars() );
 
 		$what = array_flip( $what );
@@ -441,12 +444,9 @@ abstract class DatabaseUpdater {
 			$this->checkStats();
 		}
 
-		$this->setAppliedUpdates( $wgVersion, $this->updates );
-
 		if ( $this->fileHandle ) {
 			$this->skipSchema = false;
 			$this->writeSchemaUpdateFile();
-			$this->setAppliedUpdates( "$wgVersion-schema", $this->updatesSkipped );
 		}
 	}
 
@@ -483,23 +483,6 @@ abstract class DatabaseUpdater {
 	}
 
 	/**
-	 * @param string $version
-	 * @param array $updates
-	 */
-	protected function setAppliedUpdates( $version, $updates = [] ) {
-		$this->db->clearFlag( DBO_DDLMODE );
-		if ( !$this->canUseNewUpdatelog() ) {
-			return;
-		}
-		$key = "updatelist-$version-" . time() . self::$updateCounter;
-		self::$updateCounter++;
-		$this->db->insert( 'updatelog',
-			[ 'ul_key' => $key, 'ul_value' => serialize( $updates ) ],
-			__METHOD__ );
-		$this->db->setFlag( DBO_DDLMODE );
-	}
-
-	/**
 	 * Helper function: check if the given key is present in the updatelog table.
 	 * Obviously, only use this for updates that occur after the updatelog table was
 	 * created!
@@ -509,7 +492,7 @@ abstract class DatabaseUpdater {
 	public function updateRowExists( $key ) {
 		$row = $this->db->selectRow(
 			'updatelog',
-			# Bug 65813
+			# T67813
 			'1 AS X',
 			[ 'ul_key' => $key ],
 			__METHOD__
@@ -943,11 +926,41 @@ abstract class DatabaseUpdater {
 		} elseif ( $this->updateRowExists( $updateKey ) ) {
 			$this->output( "...$field in table $table already modified by patch $patch.\n" );
 		} else {
-			$this->insertUpdateRow( $updateKey );
+			$apply = $this->applyPatch( $patch, $fullpath, "Modifying $field field of table $table" );
+			if ( $apply ) {
+				$this->insertUpdateRow( $updateKey );
+			}
+			return $apply;
+		}
+		return true;
+	}
 
-			return $this->applyPatch( $patch, $fullpath, "Modifying $field field of table $table" );
+	/**
+	 * Modify an existing table, similar to modifyField. Intended for changes that
+	 *  touch more than one column on a table.
+	 *
+	 * @param string $table Name of the table to modify
+	 * @param string $patch Name of the patch file to apply
+	 * @param string|bool $fullpath Whether to treat $patch path as relative or not, defaults to false
+	 * @return bool False if this was skipped because of schema changes being skipped
+	 */
+	public function modifyTable( $table, $patch, $fullpath = false ) {
+		if ( !$this->doTable( $table ) ) {
+			return true;
 		}
 
+		$updateKey = "$table-$patch";
+		if ( !$this->db->tableExists( $table, __METHOD__ ) ) {
+			$this->output( "...$table table does not exist, skipping modify table patch.\n" );
+		} elseif ( $this->updateRowExists( $updateKey ) ) {
+			$this->output( "...table $table already modified by patch $patch.\n" );
+		} else {
+			$apply = $this->applyPatch( $patch, $fullpath, "Modifying table $table" );
+			if ( $apply ) {
+				$this->insertUpdateRow( $updateKey );
+			}
+			return $apply;
+		}
 		return true;
 	}
 
@@ -1178,4 +1191,25 @@ abstract class DatabaseUpdater {
 			$wgContentHandlerUseDB = $this->holdContentHandlerUseDB;
 		}
 	}
+
+	/**
+	 * Migrate comments to the new 'comment' table
+	 * @since 1.30
+	 */
+	protected function migrateComments() {
+		global $wgCommentTableSchemaMigrationStage;
+		if ( $wgCommentTableSchemaMigrationStage >= MIGRATION_WRITE_NEW &&
+			!$this->updateRowExists( 'MigrateComments' )
+		) {
+			$this->output(
+				"Migrating comments to the 'comments' table, printing progress markers. For large\n" .
+				"databases, you may want to hit Ctrl-C and do this manually with\n" .
+				"maintenance/migrateComments.php.\n"
+			);
+			$task = $this->maintenance->runChild( 'MigrateComments', 'migrateComments.php' );
+			$task->execute();
+			$this->output( "done.\n" );
+		}
+	}
+
 }

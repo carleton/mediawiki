@@ -36,6 +36,8 @@ class ApiQueryRecentChanges extends ApiQueryGeneratorBase {
 		parent::__construct( $query, $moduleName, 'rc' );
 	}
 
+	private $commentStore;
+
 	private $fld_comment = false, $fld_parsedcomment = false, $fld_user = false, $fld_userid = false,
 		$fld_flags = false, $fld_timestamp = false, $fld_title = false, $fld_ids = false,
 		$fld_sizes = false, $fld_redirect = false, $fld_patrolled = false, $fld_loginfo = false,
@@ -147,7 +149,7 @@ class ApiQueryRecentChanges extends ApiQueryGeneratorBase {
 
 		/* Build our basic query. Namely, something along the lines of:
 		 * SELECT * FROM recentchanges WHERE rc_timestamp > $start
-		 * 		AND rc_timestamp < $end AND rc_namespace = $namespace
+		 *   AND rc_timestamp < $end AND rc_namespace = $namespace
 		 */
 		$this->addTables( 'recentchanges' );
 		$this->addTimestampWhereRange( 'rc_timestamp', $params['dir'], $params['start'], $params['end'] );
@@ -195,7 +197,7 @@ class ApiQueryRecentChanges extends ApiQueryGeneratorBase {
 				|| ( isset( $show['patrolled'] ) && isset( $show['unpatrolled'] ) )
 				|| ( isset( $show['!patrolled'] ) && isset( $show['unpatrolled'] ) )
 			) {
-				$this->dieUsageMsg( 'show' );
+				$this->dieWithError( 'apierror-show' );
 			}
 
 			// Check permissions
@@ -204,10 +206,7 @@ class ApiQueryRecentChanges extends ApiQueryGeneratorBase {
 				|| isset( $show['unpatrolled'] )
 			) {
 				if ( !$user->useRCPatrol() && !$user->useNPPatrol() ) {
-					$this->dieUsage(
-						'You need patrol or patrolmarks permission to request the patrolled flag',
-						'permissiondenied'
-					);
+					$this->dieWithError( 'apierror-permissiondenied-patrolflag', 'permissiondenied' );
 				}
 			}
 
@@ -239,9 +238,7 @@ class ApiQueryRecentChanges extends ApiQueryGeneratorBase {
 			);
 		}
 
-		if ( !is_null( $params['user'] ) && !is_null( $params['excludeuser'] ) ) {
-			$this->dieUsage( 'user and excludeuser cannot be used together', 'user-excludeuser' );
-		}
+		$this->requireMaxOneParameter( $params, 'user', 'excludeuser' );
 
 		if ( !is_null( $params['user'] ) ) {
 			$this->addWhereFld( 'rc_user_text', $params['user'] );
@@ -274,15 +271,11 @@ class ApiQueryRecentChanges extends ApiQueryGeneratorBase {
 			$this->initProperties( $prop );
 
 			if ( $this->fld_patrolled && !$user->useRCPatrol() && !$user->useNPPatrol() ) {
-				$this->dieUsage(
-					'You need patrol or patrolmarks permission to request the patrolled flag',
-					'permissiondenied'
-				);
+				$this->dieWithError( 'apierror-permissiondenied-patrolflag', 'permissiondenied' );
 			}
 
 			/* Add fields to our query if they are specified as a needed parameter. */
 			$this->addFieldsIf( [ 'rc_this_oldid', 'rc_last_oldid' ], $this->fld_ids );
-			$this->addFieldsIf( 'rc_comment', $this->fld_comment || $this->fld_parsedcomment );
 			$this->addFieldsIf( 'rc_user', $this->fld_user || $this->fld_userid );
 			$this->addFieldsIf( 'rc_user_text', $this->fld_user );
 			$this->addFieldsIf( [ 'rc_minor', 'rc_type', 'rc_bot' ], $this->fld_flags );
@@ -328,7 +321,7 @@ class ApiQueryRecentChanges extends ApiQueryGeneratorBase {
 			$this->addWhereFld( 'ct_tag', $params['tag'] );
 		}
 
-		// Paranoia: avoid brute force searches (bug 17342)
+		// Paranoia: avoid brute force searches (T19342)
 		if ( !is_null( $params['user'] ) || !is_null( $params['excludeuser'] ) ) {
 			if ( !$user->isAllowed( 'deletedhistory' ) ) {
 				$bitmask = Revision::DELETED_USER;
@@ -359,6 +352,15 @@ class ApiQueryRecentChanges extends ApiQueryGeneratorBase {
 		}
 
 		$this->token = $params['token'];
+
+		if ( $this->fld_comment || $this->fld_parsedcomment || $this->token ) {
+			$this->commentStore = new CommentStore( 'rc_comment' );
+			$commentQuery = $this->commentStore->getJoin();
+			$this->addTables( $commentQuery['tables'] );
+			$this->addFields( $commentQuery['fields'] );
+			$this->addJoinConds( $commentQuery['joins'] );
+		}
+
 		$this->addOption( 'LIMIT', $params['limit'] + 1 );
 
 		$hookData = [];
@@ -508,12 +510,13 @@ class ApiQueryRecentChanges extends ApiQueryGeneratorBase {
 				$anyHidden = true;
 			}
 			if ( Revision::userCanBitfield( $row->rc_deleted, Revision::DELETED_COMMENT, $user ) ) {
-				if ( $this->fld_comment && isset( $row->rc_comment ) ) {
-					$vals['comment'] = $row->rc_comment;
+				$comment = $this->commentStore->getComment( $row )->text;
+				if ( $this->fld_comment ) {
+					$vals['comment'] = $comment;
 				}
 
-				if ( $this->fld_parsedcomment && isset( $row->rc_comment ) ) {
-					$vals['parsedcomment'] = Linker::formatComment( $row->rc_comment, $title );
+				if ( $this->fld_parsedcomment ) {
+					$vals['parsedcomment'] = Linker::formatComment( $comment, $title );
 				}
 			}
 		}
@@ -571,7 +574,7 @@ class ApiQueryRecentChanges extends ApiQueryGeneratorBase {
 				$val = call_user_func( $tokenFunctions[$t], $row->rc_cur_id,
 					$title, RecentChange::newFromRow( $row ) );
 				if ( $val === false ) {
-					$this->setWarning( "Action '$t' is not allowed for the current user" );
+					$this->addWarning( [ 'apiwarn-tokennotallowed', $t ] );
 				} else {
 					$vals[$t . 'token'] = $val;
 				}
@@ -625,7 +628,8 @@ class ApiQueryRecentChanges extends ApiQueryGeneratorBase {
 			],
 			'namespace' => [
 				ApiBase::PARAM_ISMULTI => true,
-				ApiBase::PARAM_TYPE => 'namespace'
+				ApiBase::PARAM_TYPE => 'namespace',
+				ApiBase::PARAM_EXTRA_NAMESPACES => [ NS_MEDIA, NS_SPECIAL ],
 			],
 			'user' => [
 				ApiBase::PARAM_TYPE => 'user'
@@ -706,6 +710,6 @@ class ApiQueryRecentChanges extends ApiQueryGeneratorBase {
 	}
 
 	public function getHelpUrls() {
-		return 'https://www.mediawiki.org/wiki/API:Recentchanges';
+		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Recentchanges';
 	}
 }

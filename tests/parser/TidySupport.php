@@ -29,6 +29,7 @@ class TidySupport {
 
 	/**
 	 * Determine if there is a usable tidy.
+	 * @param bool $useConfiguration
 	 */
 	public function __construct( $useConfiguration = false ) {
 		global $IP, $wgUseTidy, $wgTidyBin, $wgTidyInternal, $wgTidyConfig,
@@ -58,7 +59,7 @@ class TidySupport {
 				'tidyConfigFile' => "$IP/includes/tidy/tidy.conf",
 				'tidyCommandLine' => '',
 			];
-			if ( extension_loaded( 'tidy' ) && class_exists( 'tidy' ) ) {
+			if ( extension_loaded( 'tidy' ) && ( wfIsHHVM() || class_exists( 'tidy' ) ) ) {
 				$this->config['driver'] = wfIsHHVM() ? 'RaggettInternalHHVM' : 'RaggettInternalPHP';
 			} else {
 				if ( is_executable( $wgTidyBin ) ) {

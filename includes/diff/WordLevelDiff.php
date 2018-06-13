@@ -33,7 +33,7 @@ use MediaWiki\Diff\WordAccumulator;
  */
 class WordLevelDiff extends \Diff {
 	/**
-	 * @inheritdoc
+	 * @inheritDoc
 	 */
 	protected $bailoutComplexity = 40000000; // Roughly 6K x 6K words changed
 
@@ -42,7 +42,6 @@ class WordLevelDiff extends \Diff {
 	 * @param string[] $linesAfter
 	 */
 	public function __construct( $linesBefore, $linesAfter ) {
-
 		list( $wordsBefore, $wordsBeforeStripped ) = $this->split( $linesBefore );
 		list( $wordsAfter, $wordsAfterStripped ) = $this->split( $linesAfter );
 
@@ -68,7 +67,6 @@ class WordLevelDiff extends \Diff {
 				$yi += count( $closing );
 			}
 		}
-
 	}
 
 	/**
@@ -77,7 +75,6 @@ class WordLevelDiff extends \Diff {
 	 * @return array[]
 	 */
 	private function split( $lines ) {
-
 		$words = [];
 		$stripped = [];
 		$first = true;

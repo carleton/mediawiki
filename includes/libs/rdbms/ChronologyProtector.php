@@ -20,9 +20,14 @@
  * @file
  * @ingroup Database
  */
+
+namespace Wikimedia\Rdbms;
+
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Wikimedia\WaitConditionLoop;
+use BagOStuff;
 
 /**
  * Class for ensuring a consistent ordering of events as seen by the user, despite replication.
@@ -56,9 +61,9 @@ class ChronologyProtector implements LoggerAwareInterface {
 	/** @var float[] Map of (DB master name => 1) */
 	protected $shutdownTouchDBs = [];
 
-	/** @var integer Seconds to store positions */
+	/** @var int Seconds to store positions */
 	const POSITION_TTL = 60;
-	/** @var integer Max time to wait for positions to appear */
+	/** @var int Max time to wait for positions to appear */
 	const POS_WAIT_TIMEOUT = 5;
 
 	/**
@@ -70,9 +75,9 @@ class ChronologyProtector implements LoggerAwareInterface {
 	public function __construct( BagOStuff $store, array $client, $posTime = null ) {
 		$this->store = $store;
 		$this->clientId = md5( $client['ip'] . "\n" . $client['agent'] );
-		$this->key = $store->makeGlobalKey( __CLASS__, $this->clientId );
+		$this->key = $store->makeGlobalKey( __CLASS__, $this->clientId, 'v1' );
 		$this->waitForPosTime = $posTime;
-		$this->logger = new \Psr\Log\NullLogger();
+		$this->logger = new NullLogger();
 	}
 
 	public function setLogger( LoggerInterface $logger ) {
@@ -114,7 +119,10 @@ class ChronologyProtector implements LoggerAwareInterface {
 		$this->initPositions();
 
 		$masterName = $lb->getServerName( $lb->getWriterIndex() );
-		if ( !empty( $this->startupPositions[$masterName] ) ) {
+		if (
+			isset( $this->startupPositions[$masterName] ) &&
+			$this->startupPositions[$masterName] instanceof DBMasterPos
+		) {
 			$pos = $this->startupPositions[$masterName];
 			$this->logger->info( __METHOD__ . ": LB for '$masterName' set to pos $pos\n" );
 			$lb->waitFor( $pos );
@@ -293,8 +301,9 @@ class ChronologyProtector implements LoggerAwareInterface {
 
 		$min = null;
 		foreach ( $data['positions'] as $pos ) {
-			/** @var DBMasterPos $pos */
-			$min = $min ? min( $pos->asOfTime(), $min ) : $pos->asOfTime();
+			if ( $pos instanceof DBMasterPos ) {
+				$min = $min ? min( $pos->asOfTime(), $min ) : $pos->asOfTime();
+			}
 		}
 
 		return $min;
@@ -306,15 +315,17 @@ class ChronologyProtector implements LoggerAwareInterface {
 	 * @return array
 	 */
 	private static function mergePositions( $curValue, array $shutdownPositions ) {
-		/** @var $curPositions DBMasterPos[] */
+		/** @var DBMasterPos[] $curPositions */
 		if ( $curValue === false ) {
 			$curPositions = $shutdownPositions;
 		} else {
 			$curPositions = $curValue['positions'];
 			// Use the newest positions for each DB master
 			foreach ( $shutdownPositions as $db => $pos ) {
-				if ( !isset( $curPositions[$db] )
-					|| $pos->asOfTime() > $curPositions[$db]->asOfTime()
+				if (
+					!isset( $curPositions[$db] ) ||
+					!( $curPositions[$db] instanceof DBMasterPos ) ||
+					$pos->asOfTime() > $curPositions[$db]->asOfTime()
 				) {
 					$curPositions[$db] = $pos;
 				}

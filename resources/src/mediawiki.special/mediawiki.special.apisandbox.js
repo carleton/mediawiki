@@ -1,8 +1,9 @@
-/*global OO */
+/* eslint-disable no-use-before-define */
 ( function ( $, mw, OO ) {
 	'use strict';
 	var ApiSandbox, Util, WidgetMethods, Validators,
 		$content, panel, booklet, oldhash, windowManager, fullscreenButton,
+		formatDropdown,
 		api = new mw.Api(),
 		bookletPages = [],
 		availableFormats = {},
@@ -26,7 +27,11 @@
 			},
 			apiCheckValid: function () {
 				var that = this;
-				return this.isValid().done( function ( ok ) {
+				return this.getValidity().then( function () {
+					return $.Deferred().resolve( true ).promise();
+				}, function () {
+					return $.Deferred().resolve( false ).promise();
+				} ).done( function ( ok ) {
 					ok = ok || suppressErrors;
 					that.setIcon( ok ? null : 'alert' );
 					that.setIconTitle( ok ? '' : mw.message( 'apisandbox-alert-field' ).plain() );
@@ -35,18 +40,19 @@
 		},
 
 		dateTimeInputWidget: {
-			isValid: function () {
-				var ok = !Util.apiBool( this.paramInfo.required ) || this.getApiValue() !== '';
-				return $.Deferred().resolve( ok ).promise();
+			getValidity: function () {
+				if ( !Util.apiBool( this.paramInfo.required ) || this.getApiValue() !== '' ) {
+					return $.Deferred().resolve().promise();
+				} else {
+					return $.Deferred().reject().promise();
+				}
 			}
 		},
 
 		tokenWidget: {
 			alertTokenError: function ( code, error ) {
 				windowManager.openWindow( 'errorAlert', {
-					title: mw.message(
-						'apisandbox-results-fixtoken-fail', this.paramInfo.tokentype
-					).parse(),
+					title: Util.parseMsg( 'apisandbox-results-fixtoken-fail', this.paramInfo.tokentype ),
 					message: error,
 					actions: [
 						{
@@ -137,10 +143,29 @@
 				}
 			},
 			apiCheckValid: function () {
-				var ok = this.getApiValue() !== undefined || suppressErrors;
+				var ok = true,
+					pi = this.paramInfo;
+
+				if ( !suppressErrors ) {
+					ok = this.getApiValue() !== undefined && !(
+						pi.allspecifier !== undefined &&
+						this.getItemsData().length > 1 &&
+						this.getItemsData().indexOf( pi.allspecifier ) !== -1
+					);
+				}
+
 				this.setIcon( ok ? null : 'alert' );
 				this.setIconTitle( ok ? '' : mw.message( 'apisandbox-alert-field' ).plain() );
 				return $.Deferred().resolve( ok ).promise();
+			},
+			createItemWidget: function ( data, label ) {
+				var item = OO.ui.CapsuleMultiselectWidget.prototype.createItemWidget.call( this, data, label );
+				if ( this.paramInfo.deprecatedvalues &&
+					this.paramInfo.deprecatedvalues.indexOf( data ) >= 0
+				) {
+					item.$element.addClass( 'apihelp-deprecated-value' );
+				}
+				return item;
 			}
 		},
 
@@ -201,7 +226,7 @@
 	};
 
 	/**
-	 * @class mw.special.ApiSandbox.Utils
+	 * @class mw.special.ApiSandbox.Util
 	 * @private
 	 */
 	Util = {
@@ -320,7 +345,9 @@
 						} );
 					} else if ( Util.apiBool( pi.multi ) ) {
 						widget = new OO.ui.CapsuleMultiselectWidget( {
-							allowArbitrary: true
+							allowArbitrary: true,
+							allowDuplicates: Util.apiBool( pi.allowsduplicates ),
+							$overlay: $( '#mw-apisandbox-ui' )
 						} );
 						widget.paramInfo = pi;
 						$.extend( widget, WidgetMethods.capsuleWidget );
@@ -344,8 +371,7 @@
 					break;
 
 				case 'text':
-					widget = new OO.ui.TextInputWidget( {
-						multiline: true,
+					widget = new OO.ui.MultilineTextInputWidget( {
 						required: Util.apiBool( pi.required )
 					} );
 					widget.paramInfo = pi;
@@ -372,7 +398,7 @@
 					} );
 					widget.setIcon = widget.input.setIcon.bind( widget.input );
 					widget.setIconTitle = widget.input.setIconTitle.bind( widget.input );
-					widget.isValid = widget.input.isValid.bind( widget.input );
+					widget.getValidity = widget.input.getValidity.bind( widget.input );
 					widget.paramInfo = pi;
 					$.extend( widget, WidgetMethods.textInputWidget );
 					if ( Util.apiBool( pi.enforcerange ) ) {
@@ -382,19 +408,25 @@
 					break;
 
 				case 'limit':
-					widget = new OO.ui.NumberInputWidget( {
-						required: Util.apiBool( pi.required ),
-						isInteger: true
+					widget = new OO.ui.TextInputWidget( {
+						required: Util.apiBool( pi.required )
 					} );
-					widget.setIcon = widget.input.setIcon.bind( widget.input );
-					widget.setIconTitle = widget.input.setIconTitle.bind( widget.input );
-					widget.isValid = widget.input.isValid.bind( widget.input );
-					widget.input.setValidation( function ( value ) {
-						return value === 'max' || widget.validateNumber( value );
+					widget.setValidation( function ( value ) {
+						var n, pi = this.paramInfo;
+
+						if ( value === 'max' ) {
+							return true;
+						} else {
+							n = +value;
+							return !isNaN( n ) && isFinite( n ) &&
+								Math.floor( n ) === n &&
+								n >= pi.min && n <= pi.apiSandboxMax;
+						}
 					} );
+					pi.min = pi.min || 0;
+					pi.apiSandboxMax = mw.config.get( 'apihighlimits' ) ? pi.highmax : pi.max;
 					widget.paramInfo = pi;
 					$.extend( widget, WidgetMethods.textInputWidget );
-					widget.setRange( pi.min || 0, mw.config.get( 'apihighlimits' ) ? pi.highmax : pi.max );
 					multiMode = 'enter';
 					break;
 
@@ -428,14 +460,23 @@
 						return a.data - b.data;
 					} );
 					if ( Util.apiBool( pi.multi ) ) {
+						if ( pi.allspecifier !== undefined ) {
+							items.unshift( new OO.ui.MenuOptionWidget( {
+								data: pi.allspecifier,
+								label: mw.message( 'apisandbox-multivalue-all-namespaces', pi.allspecifier ).text()
+							} ) );
+						}
+
 						widget = new OO.ui.CapsuleMultiselectWidget( {
-							menu: { items: items }
+							menu: { items: items },
+							$overlay: $( '#mw-apisandbox-ui' )
 						} );
 						widget.paramInfo = pi;
 						$.extend( widget, WidgetMethods.capsuleWidget );
 					} else {
 						widget = new OO.ui.DropdownWidget( {
-							menu: { items: items }
+							menu: { items: items },
+							$overlay: $( '#mw-apisandbox-ui' )
 						} );
 						widget.paramInfo = pi;
 						$.extend( widget, WidgetMethods.dropdownWidget );
@@ -443,16 +484,32 @@
 					break;
 
 				default:
-					if ( !$.isArray( pi.type ) ) {
+					if ( !Array.isArray( pi.type ) ) {
 						throw new Error( 'Unknown parameter type ' + pi.type );
 					}
 
 					items = $.map( pi.type, function ( v ) {
-						return new OO.ui.MenuOptionWidget( { data: String( v ), label: String( v ) } );
+						var config = {
+							data: String( v ),
+							label: String( v ),
+							classes: []
+						};
+						if ( pi.deprecatedvalues && pi.deprecatedvalues.indexOf( v ) >= 0 ) {
+							config.classes.push( 'apihelp-deprecated-value' );
+						}
+						return new OO.ui.MenuOptionWidget( config );
 					} );
 					if ( Util.apiBool( pi.multi ) ) {
+						if ( pi.allspecifier !== undefined ) {
+							items.unshift( new OO.ui.MenuOptionWidget( {
+								data: pi.allspecifier,
+								label: mw.message( 'apisandbox-multivalue-all-values', pi.allspecifier ).text()
+							} ) );
+						}
+
 						widget = new OO.ui.CapsuleMultiselectWidget( {
-							menu: { items: items }
+							menu: { items: items },
+							$overlay: $( '#mw-apisandbox-ui' )
 						} );
 						widget.paramInfo = pi;
 						$.extend( widget, WidgetMethods.capsuleWidget );
@@ -462,13 +519,22 @@
 						}
 					} else {
 						widget = new OO.ui.DropdownWidget( {
-							menu: { items: items }
+							menu: { items: items },
+							$overlay: $( '#mw-apisandbox-ui' )
 						} );
 						widget.paramInfo = pi;
 						$.extend( widget, WidgetMethods.dropdownWidget );
 						if ( Util.apiBool( pi.submodules ) ) {
 							widget.getSubmodules = WidgetMethods.submoduleWidget.single;
-							widget.getMenu().on( 'choose', ApiSandbox.updateUI );
+							widget.getMenu().on( 'select', ApiSandbox.updateUI );
+						}
+						if ( pi.deprecatedvalues ) {
+							widget.getMenu().on( 'select', function ( item ) {
+								this.$element.toggleClass(
+									'apihelp-deprecated-value',
+									pi.deprecatedvalues.indexOf( item.data ) >= 0
+								);
+							}, [], widget );
 						}
 					}
 
@@ -497,6 +563,8 @@
 
 				widget = new OO.ui.CapsuleMultiselectWidget( {
 					allowArbitrary: true,
+					allowDuplicates: Util.apiBool( pi.allowsduplicates ),
+					$overlay: $( '#mw-apisandbox-ui' ),
 					popup: {
 						classes: [ 'mw-apisandbox-popup' ],
 						$content: $content
@@ -553,17 +621,105 @@
 		},
 
 		/**
-		 * Parse an HTML string, adding target="_blank" to any links
+		 * Parse an HTML string and call Util.fixupHTML()
 		 *
 		 * @param {string} html HTML to parse
 		 * @return {jQuery}
 		 */
 		parseHTML: function ( html ) {
 			var $ret = $( $.parseHTML( html ) );
-			$ret.filter( 'a' ).add( $ret.find( 'a' ) )
+			return Util.fixupHTML( $ret );
+		},
+
+		/**
+		 * Parse an i18n message and call Util.fixupHTML()
+		 *
+		 * @param {string} key Key of message to get
+		 * @param {...Mixed} parameters Values for $N replacements
+		 * @return {jQuery}
+		 */
+		parseMsg: function () {
+			var $ret = mw.message.apply( mw.message, arguments ).parseDom();
+			return Util.fixupHTML( $ret );
+		},
+
+		/**
+		 * Fix HTML for ApiSandbox display
+		 *
+		 * Fixes are:
+		 * - Add target="_blank" to any links
+		 *
+		 * @param {jQuery} $html DOM to process
+		 * @return {jQuery}
+		 */
+		fixupHTML: function ( $html ) {
+			$html.filter( 'a' ).add( $html.find( 'a' ) )
 				.filter( '[href]:not([target])' )
 				.attr( 'target', '_blank' );
-			return $ret;
+			return $html;
+		},
+
+		/**
+		 * Format a request and return a bunch of menu option widgets
+		 *
+		 * @param {Object} displayParams Query parameters, sanitized for display.
+		 * @param {Object} rawParams Query parameters. You should probably use displayParams instead.
+		 * @return {OO.ui.MenuOptionWidget[]} Each item's data should be an OO.ui.FieldLayout
+		 */
+		formatRequest: function ( displayParams, rawParams ) {
+			var jsonInput,
+				items = [
+					new OO.ui.MenuOptionWidget( {
+						label: Util.parseMsg( 'apisandbox-request-format-url-label' ),
+						data: new OO.ui.FieldLayout(
+							new OO.ui.TextInputWidget( {
+								readOnly: true,
+								value: mw.util.wikiScript( 'api' ) + '?' + $.param( displayParams )
+							} ), {
+								label: Util.parseMsg( 'apisandbox-request-url-label' )
+							}
+						)
+					} ),
+					new OO.ui.MenuOptionWidget( {
+						label: Util.parseMsg( 'apisandbox-request-format-json-label' ),
+						data: new OO.ui.FieldLayout(
+							jsonInput = new OO.ui.MultilineTextInputWidget( {
+								classes: [ 'mw-apisandbox-textInputCode' ],
+								readOnly: true,
+								autosize: true,
+								maxRows: 6,
+								value: JSON.stringify( displayParams, null, '\t' )
+							} ), {
+								label: Util.parseMsg( 'apisandbox-request-json-label' )
+							}
+						).on( 'toggle', function ( visible ) {
+							if ( visible ) {
+								// Call updatePosition instead of adjustSize
+								// because the latter has weird caching
+								// behavior and the former bypasses it.
+								jsonInput.updatePosition();
+							}
+						} )
+					} )
+				];
+
+			mw.hook( 'apisandbox.formatRequest' ).fire( items, displayParams, rawParams );
+
+			return items;
+		},
+
+		/**
+		 * Event handler for when formatDropdown's selection changes
+		 */
+		onFormatDropdownChange: function () {
+			var i,
+				menu = formatDropdown.getMenu(),
+				items = menu.getItems(),
+				selectedField = menu.getSelectedItem() ? menu.getSelectedItem().getData() : null;
+
+			for ( i = 0; i < items.length; i++ ) {
+				items[ i ].getData().toggle( items[ i ].getData() === selectedField );
+			}
 		}
 	};
 
@@ -645,7 +801,7 @@
 
 			$content
 				.empty()
-				.append( $( '<p>' ).append( mw.message( 'apisandbox-intro' ).parse() ) )
+				.append( $( '<p>' ).append( Util.parseMsg( 'apisandbox-intro' ) ) )
 				.append(
 					$( '<div>', { id: 'mw-apisandbox-ui' } )
 						.append( $toolbar )
@@ -701,6 +857,8 @@
 
 		/**
 		 * Update the current query when the page hash changes
+		 *
+		 * @return {boolean} Successful
 		 */
 		loadFromHash: function () {
 			var params, m, re,
@@ -854,10 +1012,12 @@
 			}
 
 			$.when.apply( $, deferreds ).done( function () {
+				var formatItems, menu, selectedLabel;
+
 				if ( $.inArray( false, arguments ) !== -1 ) {
 					windowManager.openWindow( 'errorAlert', {
-						title: mw.message( 'apisandbox-submit-invalid-fields-title' ).parse(),
-						message: mw.message( 'apisandbox-submit-invalid-fields-message' ).parse(),
+						title: Util.parseMsg( 'apisandbox-submit-invalid-fields-title' ),
+						message: Util.parseMsg( 'apisandbox-submit-invalid-fields-message' ),
 						actions: [
 							{
 								action: 'accept',
@@ -870,6 +1030,8 @@
 				}
 
 				query = $.param( displayParams );
+
+				formatItems = Util.formatRequest( displayParams, params );
 
 				// Force a 'fm' format with wrappedhtml=1, if available
 				if ( params.format !== undefined ) {
@@ -895,16 +1057,36 @@
 				page.setupOutlineItem = function () {
 					this.outlineItem.setLabel( mw.message( 'apisandbox-results' ).text() );
 				};
+
+				if ( !formatDropdown ) {
+					formatDropdown = new OO.ui.DropdownWidget( {
+						menu: { items: [] },
+						$overlay: $( '#mw-apisandbox-ui' )
+					} );
+					formatDropdown.getMenu().on( 'select', Util.onFormatDropdownChange );
+				}
+
+				menu = formatDropdown.getMenu();
+				selectedLabel = menu.getSelectedItem() ? menu.getSelectedItem().getLabel() : '';
+				if ( typeof selectedLabel !== 'string' ) {
+					selectedLabel = selectedLabel.text();
+				}
+				menu.clearItems().addItems( formatItems );
+				menu.chooseItem( menu.getItemFromLabel( selectedLabel ) || menu.getFirstSelectableItem() );
+
+				// Fire the event to update field visibilities
+				Util.onFormatDropdownChange();
+
 				page.$element.empty()
 					.append(
 						new OO.ui.FieldLayout(
-							new OO.ui.TextInputWidget( {
-								readOnly: true,
-								value: mw.util.wikiScript( 'api' ) + '?' + query
-							} ), {
-								label: mw.message( 'apisandbox-request-url-label' ).parse()
+							formatDropdown, {
+								label: Util.parseMsg( 'apisandbox-request-selectformat-label' )
 							}
 						).$element,
+						$.map( formatItems, function ( item ) {
+							return item.getData().$element;
+						} ),
 						$result
 					);
 				ApiSandbox.updateUI();
@@ -941,33 +1123,39 @@
 					}
 				} )
 					.then( null, function ( code, data, result, jqXHR ) {
+						var deferred = $.Deferred();
+
 						if ( code !== 'http' ) {
 							// Not really an error, work around mw.Api thinking it is.
-							return $.Deferred()
-								.resolve( result, jqXHR )
-								.promise();
+							deferred.resolve( result, jqXHR );
+						} else {
+							// Just forward it.
+							deferred.reject.apply( deferred, arguments );
 						}
-						return this;
+						return deferred.promise();
 					} )
-					.fail( function ( code, data ) {
-						var details = 'HTTP error: ' + data.exception;
-						$result.empty()
-							.append(
-								new OO.ui.LabelWidget( {
-									label: mw.message( 'apisandbox-results-error', details ).text(),
-									classes: [ 'error' ]
-								} ).$element
-							);
-					} )
-					.done( function ( data, jqXHR ) {
+					.then( function ( data, jqXHR ) {
 						var m, loadTime, button, clear,
-							ct = jqXHR.getResponseHeader( 'Content-Type' );
+							ct = jqXHR.getResponseHeader( 'Content-Type' ),
+							loginSuppressed = jqXHR.getResponseHeader( 'MediaWiki-Login-Suppressed' ) || 'false';
 
 						$result.empty();
+						if ( loginSuppressed !== 'false' ) {
+							$( '<div>' )
+								.addClass( 'warning' )
+								.append( Util.parseMsg( 'apisandbox-results-login-suppressed' ) )
+								.appendTo( $result );
+						}
 						if ( /^text\/mediawiki-api-prettyprint-wrapped(?:;|$)/.test( ct ) ) {
-							data = $.parseJSON( data );
+							data = JSON.parse( data );
 							if ( data.modules.length ) {
 								mw.loader.load( data.modules );
+							}
+							if ( data.status && data.status !== 200 ) {
+								$( '<div>' )
+									.addClass( 'api-pretty-header api-pretty-status' )
+									.append( Util.parseMsg( 'api-format-prettyprint-status', data.status, data.statustext ) )
+									.appendTo( $result );
 							}
 							$result.append( Util.parseHTML( data.html ) );
 							loadTime = data.time;
@@ -998,11 +1186,13 @@
 										booklet.setPage( '|results|' );
 									} ).setDisabled( !paramsAreForced ) ).$element,
 									new OO.ui.PopupButtonWidget( {
+										$overlay: $( '#mw-apisandbox-ui' ),
 										framed: false,
 										icon: 'info',
 										popup: {
-											$content: $( '<div>' ).append( mw.message( 'apisandbox-continue-help' ).parse() ),
-											padded: true
+											$content: $( '<div>' ).append( Util.parseMsg( 'apisandbox-continue-help' ) ),
+											padded: true,
+											width: 'auto'
 										}
 									} ).$element
 								)
@@ -1028,6 +1218,15 @@
 								.on( 'click', button.setDisabled, [ true ], button )
 								.$element.appendTo( $result );
 						}
+					}, function ( code, data ) {
+						var details = 'HTTP error: ' + data.exception;
+						$result.empty()
+							.append(
+								new OO.ui.LabelWidget( {
+									label: mw.message( 'apisandbox-results-error', details ).text(),
+									classes: [ 'error' ]
+								} ).$element
+							);
 					} );
 			} );
 		},
@@ -1059,7 +1258,8 @@
 
 				if ( page.tokenWidget ) {
 					k = page.apiModule + page.tokenWidget.paramInfo.name;
-					tokenWait[ k ] = page.tokenWidget.fetchToken()
+					tokenWait[ k ] = page.tokenWidget.fetchToken();
+					tokenWait[ k ]
 						.done( success.bind( page.tokenWidget, k ) )
 						.fail( failure.bind( page.tokenWidget, k ) );
 				}
@@ -1150,9 +1350,7 @@
 
 				if ( that.widgets[ name ] !== undefined ) {
 					windowManager.openWindow( 'errorAlert', {
-						title: mw.message(
-							'apisandbox-dynamic-error-exists', name
-						).parse(),
+						title: Util.parseMsg( 'apisandbox-dynamic-error-exists', name ),
 						actions: [
 							{
 								action: 'accept',
@@ -1172,7 +1370,7 @@
 					nooptional: true
 				} );
 				button = new OO.ui.ButtonWidget( {
-					icon: 'remove',
+					icon: 'trash',
 					flags: 'destructive'
 				} );
 				layout = new OO.ui.ActionFieldLayout(
@@ -1199,7 +1397,7 @@
 
 		Util.fetchModuleInfo( this.apiModule )
 			.done( function ( pi ) {
-				var prefix, i, j, dl, widget, $widgetLabel, widgetField, helpField, tmp, flag, count,
+				var prefix, i, j, descriptionContainer, widget, widgetField, helpField, tmp, flag, count,
 					items = [],
 					deprecatedItems = [],
 					buttons = [],
@@ -1215,8 +1413,7 @@
 						if ( $.isFunction( f.focus ) ) {
 							f.focus();
 						}
-					},
-					doNothing = function () {};
+					};
 
 				// This is something of a hack. We always want the 'format' and
 				// 'action' parameters from the main module to be specified,
@@ -1258,9 +1455,12 @@
 
 				if ( pi.helpurls.length ) {
 					buttons.push( new OO.ui.PopupButtonWidget( {
+						$overlay: $( '#mw-apisandbox-ui' ),
 						label: mw.message( 'apisandbox-helpurls' ).text(),
 						icon: 'help',
 						popup: {
+							width: 'auto',
+							padded: true,
 							$content: $( '<ul>' ).append( $.map( pi.helpurls, function ( link ) {
 								return $( '<li>' ).append( $( '<a>', {
 									href: link,
@@ -1274,9 +1474,12 @@
 
 				if ( pi.examples.length ) {
 					buttons.push( new OO.ui.PopupButtonWidget( {
+						$overlay: $( '#mw-apisandbox-ui' ),
 						label: mw.message( 'apisandbox-examples' ).text(),
 						icon: 'code',
 						popup: {
+							width: 'auto',
+							padded: true,
 							$content: $( '<ul>' ).append( $.map( pi.examples, function ( example ) {
 								var a = $( '<a>', {
 									href: '#' + example.query,
@@ -1306,14 +1509,20 @@
 							that.tokenWidget = widget;
 						}
 
-						dl = $( '<dl>' );
-						dl.append( $( '<dd>', {
-							addClass: 'description',
-							append: Util.parseHTML( pi.parameters[ i ].description )
-						} ) );
+						descriptionContainer = $( '<div>' );
+
+						tmp = Util.parseHTML( pi.parameters[ i ].description );
+						tmp.filter( 'dl' ).makeCollapsible( {
+							collapsed: true
+						} ).children( '.mw-collapsible-toggle' ).each( function () {
+							var $this = $( this );
+							$this.parent().prev( 'p' ).append( $this );
+						} );
+						descriptionContainer.append( $( '<div>', { addClass: 'description', append: tmp } ) );
+
 						if ( pi.parameters[ i ].info && pi.parameters[ i ].info.length ) {
 							for ( j = 0; j < pi.parameters[ i ].info.length; j++ ) {
-								dl.append( $( '<dd>', {
+								descriptionContainer.append( $( '<div>', {
 									addClass: 'info',
 									append: Util.parseHTML( pi.parameters[ i ].info[ j ] )
 								} ) );
@@ -1329,18 +1538,24 @@
 
 							case 'limit':
 								if ( pi.parameters[ i ].highmax !== undefined ) {
-									dl.append( $( '<dd>', {
+									descriptionContainer.append( $( '<div>', {
 										addClass: 'info',
-										append: Util.parseHTML( mw.message(
-											'api-help-param-limit2', pi.parameters[ i ].max, pi.parameters[ i ].highmax
-										).parse() )
+										append: [
+											Util.parseMsg(
+												'api-help-param-limit2', pi.parameters[ i ].max, pi.parameters[ i ].highmax
+											),
+											' ',
+											Util.parseMsg( 'apisandbox-param-limit' )
+										]
 									} ) );
 								} else {
-									dl.append( $( '<dd>', {
+									descriptionContainer.append( $( '<div>', {
 										addClass: 'info',
-										append: Util.parseHTML( mw.message(
-											'api-help-param-limit', pi.parameters[ i ].max
-										).parse() )
+										append: [
+											Util.parseMsg( 'api-help-param-limit', pi.parameters[ i ].max ),
+											' ',
+											Util.parseMsg( 'apisandbox-param-limit' )
+										]
 									} ) );
 								}
 								break;
@@ -1354,19 +1569,19 @@
 									tmp += 'max';
 								}
 								if ( tmp !== '' ) {
-									dl.append( $( '<dd>', {
+									descriptionContainer.append( $( '<div>', {
 										addClass: 'info',
-										append: Util.parseHTML( mw.message(
+										append: Util.parseMsg(
 											'api-help-param-integer-' + tmp,
 											Util.apiBool( pi.parameters[ i ].multi ) ? 2 : 1,
 											pi.parameters[ i ].min, pi.parameters[ i ].max
-										).parse() )
+										)
 									} ) );
 								}
 								break;
 
 							default:
-								if ( $.isArray( pi.parameters[ i ].type ) ) {
+								if ( Array.isArray( pi.parameters[ i ].type ) ) {
 									flag = false;
 									count = pi.parameters[ i ].type.length;
 								}
@@ -1390,7 +1605,7 @@
 								);
 							}
 							if ( tmp.length ) {
-								dl.append( $( '<dd>', {
+								descriptionContainer.append( $( '<div>', {
 									addClass: 'info',
 									append: Util.parseHTML( tmp.join( ' ' ) )
 								} ) );
@@ -1403,30 +1618,28 @@
 							} ), {
 								align: 'inline',
 								classes: [ 'mw-apisandbox-help-field' ],
-								label: dl
+								label: descriptionContainer
 							}
 						);
 
-						$widgetLabel = $( '<span>' );
 						widgetField = new OO.ui.FieldLayout(
 							widget,
 							{
 								align: 'left',
 								classes: [ 'mw-apisandbox-widget-field' ],
-								label: prefix + pi.parameters[ i ].name,
-								$label: $widgetLabel
+								label: prefix + pi.parameters[ i ].name
 							}
 						);
 
-						// FieldLayout only does click for InputElement
-						// widgets. So supply our own click handler.
-						$widgetLabel.on( 'click', widgetLabelOnClick.bind( widgetField ) );
+						// We need our own click handler on the widget label to
+						// turn off the disablement.
+						widgetField.$label.on( 'click', widgetLabelOnClick.bind( widgetField ) );
 
 						// Don't grey out the label when the field is disabled,
 						// it makes it too hard to read and our "disabled"
 						// isn't really disabled.
 						widgetField.onFieldDisable( false );
-						widgetField.onFieldDisable = doNothing;
+						widgetField.onFieldDisable = $.noop;
 
 						if ( Util.apiBool( pi.parameters[ i ].deprecated ) ) {
 							deprecatedItems.push( widgetField, helpField );
@@ -1440,7 +1653,7 @@
 					items.push( new OO.ui.FieldLayout(
 						new OO.ui.Widget( {} ).toggle( false ), {
 							align: 'top',
-							label: Util.parseHTML( mw.message( 'apisandbox-no-parameters' ).parse() )
+							label: Util.parseMsg( 'apisandbox-no-parameters' )
 						}
 					) );
 				}

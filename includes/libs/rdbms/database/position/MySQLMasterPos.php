@@ -1,4 +1,9 @@
 <?php
+
+namespace Wikimedia\Rdbms;
+
+use InvalidArgumentException;
+
 /**
  * DBMasterPos class for MySQL/MariaDB
  *
@@ -19,7 +24,7 @@ class MySQLMasterPos implements DBMasterPos {
 
 	/**
 	 * @param string $file Binlog file name
-	 * @param integer $pos Binlog position
+	 * @param int $pos Binlog position
 	 * @param string $gtid Comma separated GTID set [optional]
 	 */
 	function __construct( $file, $pos, $gtid = '' ) {
@@ -117,8 +122,8 @@ class MySQLMasterPos implements DBMasterPos {
 	}
 
 	/**
-	 * @see http://dev.mysql.com/doc/refman/5.7/en/show-master-status.html
-	 * @see http://dev.mysql.com/doc/refman/5.7/en/show-slave-status.html
+	 * @see https://dev.mysql.com/doc/refman/5.7/en/show-master-status.html
+	 * @see https://dev.mysql.com/doc/refman/5.7/en/show-slave-status.html
 	 * @return array|bool (binlog, (integer file number, integer position)) or false
 	 */
 	protected function getBinlogCoordinates() {

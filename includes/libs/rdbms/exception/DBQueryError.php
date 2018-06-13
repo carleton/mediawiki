@@ -19,13 +19,15 @@
  * @ingroup Database
  */
 
+namespace Wikimedia\Rdbms;
+
 /**
  * @ingroup Database
  */
 class DBQueryError extends DBExpectedError {
 	/** @var string */
 	public $error;
-	/** @var integer */
+	/** @var int */
 	public $errno;
 	/** @var string */
 	public $sql;
@@ -39,7 +41,7 @@ class DBQueryError extends DBExpectedError {
 	 * @param string $sql
 	 * @param string $fname
 	 */
-	function __construct( IDatabase $db, $error, $errno, $sql, $fname ) {
+	public function __construct( IDatabase $db, $error, $errno, $sql, $fname ) {
 		if ( $db instanceof Database && $db->wasConnectionError( $errno ) ) {
 			$message = "A connection error occured. \n" .
 				"Query: $sql\n" .
@@ -61,3 +63,5 @@ class DBQueryError extends DBExpectedError {
 		$this->fname = $fname;
 	}
 }
+
+class_alias( DBQueryError::class, 'DBQueryError' );

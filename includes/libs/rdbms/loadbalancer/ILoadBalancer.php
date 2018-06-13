@@ -19,8 +19,11 @@
  *
  * @file
  * @ingroup Database
- * @author Aaron Schulz
  */
+namespace Wikimedia\Rdbms;
+
+use Exception;
+use InvalidArgumentException;
 
 /**
  * Database cluster connection, tracking, load balancing, and transaction manager interface
@@ -73,13 +76,16 @@
  * @ingroup Database
  */
 interface ILoadBalancer {
-	/** @var integer Request a replica DB connection */
+	/** @var int Request a replica DB connection */
 	const DB_REPLICA = -1;
-	/** @var integer Request a master DB connection */
+	/** @var int Request a master DB connection */
 	const DB_MASTER = -2;
 
 	/** @var string Domain specifier when no specific database needs to be selected */
 	const DOMAIN_ANY = '';
+
+	/** @var int DB handle should have DBO_TRX disabled and the caller will leave it as such */
+	const CONN_TRX_AUTO = 1;
 
 	/**
 	 * Construct a manager of IDatabase connection objects
@@ -91,8 +97,8 @@ interface ILoadBalancer {
 	 *  - readOnlyReason : Reason the master DB is read-only if so [optional]
 	 *  - waitTimeout : Maximum time to wait for replicas for consistency [optional]
 	 *  - srvCache : BagOStuff object for server cache [optional]
-	 *  - memCache : BagOStuff object for cluster memory cache [optional]
 	 *  - wanCache : WANObjectCache object [optional]
+	 *  - chronologyProtector: ChronologyProtector object [optional]
 	 *  - hostname : The name of the current server [optional]
 	 *  - cliMode: Whether the execution context is a CLI script. [optional]
 	 *  - profiler : Class name or instance with profileIn()/profileOut() methods. [optional]
@@ -108,8 +114,9 @@ interface ILoadBalancer {
 
 	/**
 	 * Get the index of the reader connection, which may be a replica DB
+	 *
 	 * This takes into account load ratios and lag times. It should
-	 * always return a consistent index during a given invocation
+	 * always return a consistent index during a given invocation.
 	 *
 	 * Side effect: opens connections to databases
 	 * @param string|bool $group Query group, or false for the generic reader
@@ -121,9 +128,15 @@ interface ILoadBalancer {
 
 	/**
 	 * Set the master wait position
-	 * If a DB_REPLICA connection has been opened already, waits
-	 * Otherwise sets a variable telling it to wait if such a connection is opened
-	 * @param DBMasterPos $pos
+	 *
+	 * If a DB_REPLICA connection has been opened already, then wait immediately.
+	 * Otherwise sets a variable telling it to wait if such a connection is opened.
+	 *
+	 * This only applies to connections to the generic replica DB for this request.
+	 * If a timeout happens when waiting, then getLaggedReplicaMode()/laggedReplicaUsed()
+	 * will return true.
+	 *
+	 * @param DBMasterPos|bool $pos Master position or false
 	 */
 	public function waitFor( $pos );
 
@@ -132,7 +145,7 @@ interface ILoadBalancer {
 	 *
 	 * This can be used a faster proxy for waitForAll()
 	 *
-	 * @param DBMasterPos $pos
+	 * @param DBMasterPos|bool $pos Master position or false
 	 * @param int $timeout Max seconds to wait; default is mWaitTimeout
 	 * @return bool Success (able to connect and no timeouts reached)
 	 */
@@ -140,7 +153,8 @@ interface ILoadBalancer {
 
 	/**
 	 * Set the master wait position and wait for ALL replica DBs to catch up to it
-	 * @param DBMasterPos $pos
+	 *
+	 * @param DBMasterPos|bool $pos Master position or false
 	 * @param int $timeout Max seconds to wait; default is mWaitTimeout
 	 * @return bool Success (able to connect and no timeouts reached)
 	 */
@@ -148,30 +162,32 @@ interface ILoadBalancer {
 
 	/**
 	 * Get any open connection to a given server index, local or foreign
-	 * Returns false if there is no connection open
 	 *
-	 * @param int $i Server index
-	 * @return IDatabase|bool False on failure
+	 * @param int $i Server index or DB_MASTER/DB_REPLICA
+	 * @return Database|bool False if no such connection is open
 	 */
 	public function getAnyOpenConnection( $i );
 
 	/**
 	 * Get a connection by index
-	 * This is the main entry point for this class.
 	 *
-	 * @param int $i Server index
+	 * Avoid using CONN_TRX_AUTO with sqlite (e.g. check getServerType() first)
+	 *
+	 * @param int $i Server index or DB_MASTER/DB_REPLICA
 	 * @param array|string|bool $groups Query group(s), or false for the generic reader
 	 * @param string|bool $domain Domain ID, or false for the current domain
+	 * @param int $flags Bitfield of CONN_* class constants
 	 *
 	 * @throws DBError
-	 * @return IDatabase
+	 * @return Database
 	 */
-	public function getConnection( $i, $groups = [], $domain = false );
+	public function getConnection( $i, $groups = [], $domain = false, $flags = 0 );
 
 	/**
-	 * Mark a foreign connection as being available for reuse under a different
-	 * DB name or prefix. This mechanism is reference-counted, and must be called
-	 * the same number of times as getConnection() to work.
+	 * Mark a foreign connection as being available for reuse under a different DB domain
+	 *
+	 * This mechanism is reference-counted, and must be called the same number of times
+	 * as getConnection() to work.
 	 *
 	 * @param IDatabase $conn
 	 * @throws InvalidArgumentException
@@ -181,47 +197,71 @@ interface ILoadBalancer {
 	/**
 	 * Get a database connection handle reference
 	 *
-	 * The handle's methods wrap simply wrap those of a IDatabase handle
+	 * The handle's methods simply wrap those of a Database handle
 	 *
-	 * @see LoadBalancer::getConnection() for parameter information
+	 * Avoid using CONN_TRX_AUTO with sqlite (e.g. check getServerType() first)
 	 *
-	 * @param int $db
+	 * @see ILoadBalancer::getConnection() for parameter information
+	 *
+	 * @param int $i Server index or DB_MASTER/DB_REPLICA
 	 * @param array|string|bool $groups Query group(s), or false for the generic reader
 	 * @param string|bool $domain Domain ID, or false for the current domain
+	 * @param int $flags Bitfield of CONN_* class constants (e.g. CONN_TRX_AUTO)
 	 * @return DBConnRef
 	 */
-	public function getConnectionRef( $db, $groups = [], $domain = false );
+	public function getConnectionRef( $i, $groups = [], $domain = false, $flags = 0 );
 
 	/**
 	 * Get a database connection handle reference without connecting yet
 	 *
-	 * The handle's methods wrap simply wrap those of a IDatabase handle
+	 * The handle's methods simply wrap those of a Database handle
 	 *
-	 * @see LoadBalancer::getConnection() for parameter information
+	 * Avoid using CONN_TRX_AUTO with sqlite (e.g. check getServerType() first)
 	 *
-	 * @param int $db
+	 * @see ILoadBalancer::getConnection() for parameter information
+	 *
+	 * @param int $i Server index or DB_MASTER/DB_REPLICA
 	 * @param array|string|bool $groups Query group(s), or false for the generic reader
 	 * @param string|bool $domain Domain ID, or false for the current domain
+	 * @param int $flags Bitfield of CONN_* class constants (e.g. CONN_TRX_AUTO)
 	 * @return DBConnRef
 	 */
-	public function getLazyConnectionRef( $db, $groups = [], $domain = false );
+	public function getLazyConnectionRef( $i, $groups = [], $domain = false, $flags = 0 );
+
+	/**
+	 * Get a maintenance database connection handle reference for migrations and schema changes
+	 *
+	 * The handle's methods simply wrap those of a Database handle
+	 *
+	 * Avoid using CONN_TRX_AUTO with sqlite (e.g. check getServerType() first)
+	 *
+	 * @see ILoadBalancer::getConnection() for parameter information
+	 *
+	 * @param int $db Server index or DB_MASTER/DB_REPLICA
+	 * @param array|string|bool $groups Query group(s), or false for the generic reader
+	 * @param string|bool $domain Domain ID, or false for the current domain
+	 * @param int $flags Bitfield of CONN_* class constants (e.g. CONN_TRX_AUTO)
+	 * @return MaintainableDBConnRef
+	 */
+	public function getMaintenanceConnectionRef( $db, $groups = [], $domain = false, $flags = 0 );
 
 	/**
 	 * Open a connection to the server given by the specified index
-	 * Index must be an actual index into the array.
-	 * If the server is already open, returns it.
 	 *
-	 * On error, returns false, and the connection which caused the
-	 * error will be available via $this->mErrorConnection.
+	 * The index must be an actual index into the array. If a connection to the server is
+	 * already open and not considered an "in use" foreign connection, this simply returns it.
+	 *
+	 * Avoid using CONN_TRX_AUTO with sqlite (e.g. check getServerType() first)
 	 *
 	 * @note If disable() was called on this LoadBalancer, this method will throw a DBAccessError.
 	 *
-	 * @param int $i Server index
+	 * @param int $i Server index (does not support DB_MASTER/DB_REPLICA)
 	 * @param string|bool $domain Domain ID, or false for the current domain
-	 * @return IDatabase|bool Returns false on errors
+	 * @param int $flags Bitfield of CONN_* class constants (e.g. CONN_TRX_AUTO)
+	 * @return Database|bool Returns false on errors
 	 * @throws DBAccessError
 	 */
-	public function openConnection( $i, $domain = false );
+	public function openConnection( $i, $domain = false, $flags = 0 );
 
 	/**
 	 * @return int
@@ -231,7 +271,7 @@ interface ILoadBalancer {
 	/**
 	 * Returns true if the specified index is a valid server index
 	 *
-	 * @param string $i
+	 * @param int $i
 	 * @return bool
 	 */
 	public function haveIndex( $i );
@@ -239,7 +279,7 @@ interface ILoadBalancer {
 	/**
 	 * Returns true if the specified index is valid and has non-zero load
 	 *
-	 * @param string $i
+	 * @param int $i
 	 * @return bool
 	 */
 	public function isNonZeroLoad( $i );
@@ -253,16 +293,27 @@ interface ILoadBalancer {
 
 	/**
 	 * Get the host name or IP address of the server with the specified index
-	 * Prefer a readable name if available.
-	 * @param string $i
-	 * @return string
+	 *
+	 * @param int $i
+	 * @return string Readable name if available or IP/host otherwise
 	 */
 	public function getServerName( $i );
+
+	/**
+	 * Get DB type of the server with the specified index
+	 *
+	 * @param int $i
+	 * @return string One of (mysql,postgres,sqlite,...) or "unknown" for bad indexes
+	 * @since 1.30
+	 */
+	public function getServerType( $i );
 
 	/**
 	 * Return the server info structure for a given index, or false if the index is invalid.
 	 * @param int $i
 	 * @return array|bool
+	 *
+	 * @deprecated Since 1.30, no alternative
 	 */
 	public function getServerInfo( $i );
 
@@ -271,6 +322,8 @@ interface ILoadBalancer {
 	 * is created if it doesn't exist
 	 * @param int $i
 	 * @param array $serverInfo
+	 *
+	 * @deprecated Since 1.30, construct new object
 	 */
 	public function setServerInfo( $i, array $serverInfo );
 
@@ -353,7 +406,7 @@ interface ILoadBalancer {
 	 *
 	 * Use this only for mutli-database commits
 	 *
-	 * @param integer $type IDatabase::TRIGGER_* constant
+	 * @param int $type IDatabase::TRIGGER_* constant
 	 * @return Exception|null The first exception or null if there were none
 	 */
 	public function runMasterPostTrxCallbacks( $type );
@@ -417,20 +470,24 @@ interface ILoadBalancer {
 	/**
 	 * @note This method will trigger a DB connection if not yet done
 	 * @param string|bool $domain Domain ID, or false for the current domain
-	 * @return bool Whether the generic connection for reads is highly "lagged"
+	 * @return bool Whether the database for generic connections this request is highly "lagged"
 	 */
 	public function getLaggedReplicaMode( $domain = false );
 
 	/**
+	 * Checks whether the database for generic connections this request was both:
+	 *   - a) Already choosen due to a prior connection attempt
+	 *   - b) Considered highly "lagged"
+	 *
 	 * @note This method will never cause a new DB connection
-	 * @return bool Whether any generic connection used for reads was highly "lagged"
+	 * @return bool
 	 */
 	public function laggedReplicaUsed();
 
 	/**
 	 * @note This method may trigger a DB connection if not yet done
 	 * @param string|bool $domain Domain ID, or false for the current domain
-	 * @param IDatabase|null DB master connection; used to avoid loops [optional]
+	 * @param IDatabase|null $conn DB master connection; used to avoid loops [optional]
 	 * @return string|bool Reason the master is read-only or false if it is not
 	 */
 	public function getReadOnlyReason( $domain = false, IDatabase $conn = null );
@@ -515,10 +572,10 @@ interface ILoadBalancer {
 	 *
 	 * @param IDatabase $conn Replica DB
 	 * @param DBMasterPos|bool $pos Master position; default: current position
-	 * @param integer|null $timeout Timeout in seconds [optional]
+	 * @param int $timeout Timeout in seconds [optional]
 	 * @return bool Success
 	 */
-	public function safeWaitForMasterPos( IDatabase $conn, $pos = false, $timeout = null );
+	public function safeWaitForMasterPos( IDatabase $conn, $pos = false, $timeout = 10 );
 
 	/**
 	 * Set a callback via IDatabase::setTransactionListener() on

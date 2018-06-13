@@ -17,7 +17,9 @@
  *
  * @file
  */
+use MediaWiki\MediaWikiServices;
 use Wikimedia\Assert\Assert;
+use Wikimedia\Rdbms\IDatabase;
 
 /**
  * Class for handling updates to the site_stats table
@@ -92,7 +94,7 @@ class SiteStatsUpdate implements DeferrableUpdate, MergeableUpdate {
 		global $wgSiteStatsAsyncFactor;
 
 		$dbw = wfGetDB( DB_MASTER );
-		$lockKey = wfMemcKey( 'site_stats' ); // prepend wiki ID
+		$lockKey = wfWikiID() . ':site_stats'; // prepend wiki ID
 		$pd = [];
 		if ( $wgSiteStatsAsyncFactor ) {
 			// Lock the table so we don't have double DB/memcached updates
@@ -169,7 +171,7 @@ class SiteStatsUpdate implements DeferrableUpdate, MergeableUpdate {
 	}
 
 	protected function doUpdateContextStats() {
-		$stats = RequestContext::getMain()->getStats();
+		$stats = MediaWikiServices::getInstance()->getStatsdDataFactory();
 		foreach ( [ 'edits', 'articles', 'pages', 'users', 'images' ] as $type ) {
 			$delta = $this->$type;
 			if ( $delta !== 0 ) {
@@ -187,7 +189,7 @@ class SiteStatsUpdate implements DeferrableUpdate, MergeableUpdate {
 	}
 
 	/**
-	 * @param string $sql
+	 * @param string &$sql
 	 * @param string $field
 	 * @param int $delta
 	 */
@@ -205,12 +207,13 @@ class SiteStatsUpdate implements DeferrableUpdate, MergeableUpdate {
 	}
 
 	/**
+	 * @param BagOStuff $cache
 	 * @param string $type
 	 * @param string $sign ('+' or '-')
 	 * @return string
 	 */
-	private function getTypeCacheKey( $type, $sign ) {
-		return wfMemcKey( 'sitestatsupdate', 'pendingdelta', $type, $sign );
+	private function getTypeCacheKey( BagOStuff $cache, $type, $sign ) {
+		return $cache->makeKey( 'sitestatsupdate', 'pendingdelta', $type, $sign );
 	}
 
 	/**
@@ -220,11 +223,11 @@ class SiteStatsUpdate implements DeferrableUpdate, MergeableUpdate {
 	 * @param int $delta Delta (positive or negative)
 	 */
 	protected function adjustPending( $type, $delta ) {
-		$cache = ObjectCache::getMainStashInstance();
+		$cache = MediaWikiServices::getInstance()->getMainObjectStash();
 		if ( $delta < 0 ) { // decrement
-			$key = $this->getTypeCacheKey( $type, '-' );
+			$key = $this->getTypeCacheKey( $cache, $type, '-' );
 		} else { // increment
-			$key = $this->getTypeCacheKey( $type, '+' );
+			$key = $this->getTypeCacheKey( $cache, $type, '+' );
 		}
 
 		$magnitude = abs( $delta );
@@ -236,7 +239,7 @@ class SiteStatsUpdate implements DeferrableUpdate, MergeableUpdate {
 	 * @return array Positive and negative deltas for each type
 	 */
 	protected function getPendingDeltas() {
-		$cache = ObjectCache::getMainStashInstance();
+		$cache = MediaWikiServices::getInstance()->getMainObjectStash();
 
 		$pending = [];
 		foreach ( [ 'ss_total_edits',
@@ -244,8 +247,8 @@ class SiteStatsUpdate implements DeferrableUpdate, MergeableUpdate {
 		) {
 			// Get pending increments and pending decrements
 			$flg = BagOStuff::READ_LATEST;
-			$pending[$type]['+'] = (int)$cache->get( $this->getTypeCacheKey( $type, '+' ), $flg );
-			$pending[$type]['-'] = (int)$cache->get( $this->getTypeCacheKey( $type, '-' ), $flg );
+			$pending[$type]['+'] = (int)$cache->get( $this->getTypeCacheKey( $cache, $type, '+' ), $flg );
+			$pending[$type]['-'] = (int)$cache->get( $this->getTypeCacheKey( $cache, $type, '-' ), $flg );
 		}
 
 		return $pending;
@@ -256,12 +259,12 @@ class SiteStatsUpdate implements DeferrableUpdate, MergeableUpdate {
 	 * @param array $pd Result of getPendingDeltas(), used for DB update
 	 */
 	protected function removePendingDeltas( array $pd ) {
-		$cache = ObjectCache::getMainStashInstance();
+		$cache = MediaWikiServices::getInstance()->getMainObjectStash();
 
 		foreach ( $pd as $type => $deltas ) {
 			foreach ( $deltas as $sign => $magnitude ) {
 				// Lower the pending counter now that we applied these changes
-				$cache->decr( $this->getTypeCacheKey( $type, $sign ), $magnitude );
+				$cache->decr( $this->getTypeCacheKey( $cache, $type, $sign ), $magnitude );
 			}
 		}
 	}

@@ -36,19 +36,6 @@ class HTMLFileCache extends FileCacheBase {
 	const MODE_REBUILD = 2; // background cache rebuild mode
 
 	/**
-	 * Construct an HTMLFileCache object from a Title and an action
-	 *
-	 * @deprecated since 1.24, instantiate this class directly
-	 * @param Title|string $title Title object or prefixed DB key string
-	 * @param string $action
-	 * @throws MWException
-	 * @return HTMLFileCache
-	 */
-	public static function newFromTitle( $title, $action ) {
-		return new self( $title, $action );
-	}
-
-	/**
 	 * @param Title|string $title Title object or prefixed DB key string
 	 * @param string $action
 	 * @throws MWException
@@ -100,7 +87,7 @@ class HTMLFileCache extends FileCacheBase {
 	/**
 	 * Check if pages can be cached for this request/user
 	 * @param IContextSource $context
-	 * @param integer $mode One of the HTMLFileCache::MODE_* constants (since 1.28)
+	 * @param int $mode One of the HTMLFileCache::MODE_* constants (since 1.28)
 	 * @return bool
 	 */
 	public static function useFileCache( IContextSource $context, $mode = self::MODE_NORMAL ) {
@@ -153,7 +140,7 @@ class HTMLFileCache extends FileCacheBase {
 	/**
 	 * Read from cache to context output
 	 * @param IContextSource $context
-	 * @param integer $mode One of the HTMLFileCache::MODE_* constants
+	 * @param int $mode One of the HTMLFileCache::MODE_* constants
 	 * @return void
 	 */
 	public function loadFromFileCache( IContextSource $context, $mode = self::MODE_NORMAL ) {

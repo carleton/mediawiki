@@ -20,7 +20,6 @@
  * @file
  * @ingroup FileBackend
  * @author Russ Nelson
- * @author Aaron Schulz
  */
 
 /**
@@ -35,25 +34,20 @@
 class SwiftFileBackend extends FileBackendStore {
 	/** @var MultiHttpClient */
 	protected $http;
-
 	/** @var int TTL in seconds */
 	protected $authTTL;
-
 	/** @var string Authentication base URL (without version) */
 	protected $swiftAuthUrl;
-
+	/** @var string Override of storage base URL */
+	protected $swiftStorageUrl;
 	/** @var string Swift user (account:user) to authenticate as */
 	protected $swiftUser;
-
 	/** @var string Secret key for user */
 	protected $swiftKey;
-
 	/** @var string Shared secret value for making temp URLs */
 	protected $swiftTempUrlKey;
-
 	/** @var string S3 access key (RADOS Gateway) */
 	protected $rgwS3AccessKey;
-
 	/** @var string S3 authentication key (RADOS Gateway) */
 	protected $rgwS3SecretKey;
 
@@ -65,10 +59,8 @@ class SwiftFileBackend extends FileBackendStore {
 
 	/** @var array */
 	protected $authCreds;
-
 	/** @var int UNIX timestamp */
 	protected $authSessionTimestamp = 0;
-
 	/** @var int UNIX timestamp */
 	protected $authErrorTimestamp = null;
 
@@ -77,13 +69,15 @@ class SwiftFileBackend extends FileBackendStore {
 
 	/**
 	 * @see FileBackendStore::__construct()
-	 * Additional $config params include:
+	 * @param array $config Params include:
 	 *   - swiftAuthUrl       : Swift authentication server URL
 	 *   - swiftUser          : Swift user used by MediaWiki (account:username)
 	 *   - swiftKey           : Swift authentication key for the above user
 	 *   - swiftAuthTTL       : Swift authentication TTL (seconds)
 	 *   - swiftTempUrlKey    : Swift "X-Account-Meta-Temp-URL-Key" value on the account.
 	 *                          Do not set this until it has been set in the backend.
+	 *   - swiftStorageUrl    : Swift storage URL (overrides that of the authentication response).
+	 *                          This is useful to set if a TLS proxy is in use.
 	 *   - shardViaHashLevels : Map of container names to sharding config with:
 	 *                             - base   : base of hash characters, 16 or 36
 	 *                             - levels : the number of hash levels (and digits)
@@ -116,6 +110,9 @@ class SwiftFileBackend extends FileBackendStore {
 		$this->swiftTempUrlKey = isset( $config['swiftTempUrlKey'] )
 			? $config['swiftTempUrlKey']
 			: '';
+		$this->swiftStorageUrl = isset( $config['swiftStorageUrl'] )
+			? $config['swiftStorageUrl']
+			: null;
 		$this->shardViaHashLevels = isset( $config['shardViaHashLevels'] )
 			? $config['shardViaHashLevels']
 			: '';
@@ -176,7 +173,6 @@ class SwiftFileBackend extends FileBackendStore {
 		return isset( $params['headers'] )
 			? $this->getCustomHeaders( $params['headers'] )
 			: [];
-
 	}
 
 	/**
@@ -288,7 +284,7 @@ class SwiftFileBackend extends FileBackendStore {
 		if ( !empty( $params['async'] ) ) { // deferred
 			$status->value = $opHandle;
 		} else { // actually write the object in Swift
-			$status->merge( current( $this->doExecuteOpHandlesInternal( [ $opHandle ] ) ) );
+			$status->merge( current( $this->executeOpHandlesInternal( [ $opHandle ] ) ) );
 		}
 
 		return $status;
@@ -349,10 +345,12 @@ class SwiftFileBackend extends FileBackendStore {
 		};
 
 		$opHandle = new SwiftFileOpHandle( $this, $handler, $reqs );
+		$opHandle->resourcesToClose[] = $handle;
+
 		if ( !empty( $params['async'] ) ) { // deferred
 			$status->value = $opHandle;
 		} else { // actually write the object in Swift
-			$status->merge( current( $this->doExecuteOpHandlesInternal( [ $opHandle ] ) ) );
+			$status->merge( current( $this->executeOpHandlesInternal( [ $opHandle ] ) ) );
 		}
 
 		return $status;
@@ -400,7 +398,7 @@ class SwiftFileBackend extends FileBackendStore {
 		if ( !empty( $params['async'] ) ) { // deferred
 			$status->value = $opHandle;
 		} else { // actually write the object in Swift
-			$status->merge( current( $this->doExecuteOpHandlesInternal( [ $opHandle ] ) ) );
+			$status->merge( current( $this->executeOpHandlesInternal( [ $opHandle ] ) ) );
 		}
 
 		return $status;
@@ -459,7 +457,7 @@ class SwiftFileBackend extends FileBackendStore {
 		if ( !empty( $params['async'] ) ) { // deferred
 			$status->value = $opHandle;
 		} else { // actually move the object in Swift
-			$status->merge( current( $this->doExecuteOpHandlesInternal( [ $opHandle ] ) ) );
+			$status->merge( current( $this->executeOpHandlesInternal( [ $opHandle ] ) ) );
 		}
 
 		return $status;
@@ -499,7 +497,7 @@ class SwiftFileBackend extends FileBackendStore {
 		if ( !empty( $params['async'] ) ) { // deferred
 			$status->value = $opHandle;
 		} else { // actually delete the object in Swift
-			$status->merge( current( $this->doExecuteOpHandlesInternal( [ $opHandle ] ) ) );
+			$status->merge( current( $this->executeOpHandlesInternal( [ $opHandle ] ) ) );
 		}
 
 		return $status;
@@ -555,7 +553,7 @@ class SwiftFileBackend extends FileBackendStore {
 		if ( !empty( $params['async'] ) ) { // deferred
 			$status->value = $opHandle;
 		} else { // actually change the object in Swift
-			$status->merge( current( $this->doExecuteOpHandlesInternal( [ $opHandle ] ) ) );
+			$status->merge( current( $this->executeOpHandlesInternal( [ $opHandle ] ) ) );
 		}
 
 		return $status;
@@ -830,7 +828,7 @@ class SwiftFileBackend extends FileBackendStore {
 	 *
 	 * @param string $fullCont Resolved container name
 	 * @param string $dir Resolved storage directory with no trailing slash
-	 * @param string|null $after Resolved container relative path to list items after
+	 * @param string|null &$after Resolved container relative path to list items after
 	 * @param int $limit Max number of items to list
 	 * @param array $params Parameters for getDirectoryList()
 	 * @return array List of container relative resolved paths of directories directly under $dir
@@ -910,7 +908,7 @@ class SwiftFileBackend extends FileBackendStore {
 	 *
 	 * @param string $fullCont Resolved container name
 	 * @param string $dir Resolved storage directory with no trailing slash
-	 * @param string|null $after Resolved container relative path of file to list items after
+	 * @param string|null &$after Resolved container relative path of file to list items after
 	 * @param int $limit Max number of items to list
 	 * @param array $params Parameters for getDirectoryList()
 	 * @return array List of resolved container relative paths of files under $dir
@@ -1090,7 +1088,7 @@ class SwiftFileBackend extends FileBackendStore {
 			// good
 		} elseif ( $rcode === 404 ) {
 			$status->fatal( 'backend-fail-stream', $params['src'] );
-			// Per bug 41113, nasty things can happen if bad cache entries get
+			// Per T43113, nasty things can happen if bad cache entries get
 			// stuck in cache. It's also possible that this error can come up
 			// with simple race conditions. Clear out the stat cache to be safe.
 			$this->clearCache( [ $params['src'] ] );
@@ -1209,7 +1207,7 @@ class SwiftFileBackend extends FileBackendStore {
 					$this->rgwS3SecretKey,
 					true // raw
 				) );
-				// See http://s3.amazonaws.com/doc/s3-developer-guide/RESTAuthentication.html.
+				// See https://s3.amazonaws.com/doc/s3-developer-guide/RESTAuthentication.html.
 				// Note: adding a newline for empty CanonicalizedAmzHeaders does not work.
 				// Note: S3 API is the rgw default; remove the /swift/ URL bit.
 				return str_replace( '/swift/v1', '', $this->storageUrl( $auth ) . $spath ) .
@@ -1252,7 +1250,7 @@ class SwiftFileBackend extends FileBackendStore {
 	 * @return StatusValue[]
 	 */
 	protected function doExecuteOpHandlesInternal( array $fileOpHandles ) {
-		/** @var $statuses StatusValue[] */
+		/** @var StatusValue[] $statuses */
 		$statuses = [];
 
 		$auth = $this->getAuthentication();
@@ -1305,7 +1303,7 @@ class SwiftFileBackend extends FileBackendStore {
 	/**
 	 * Set read/write permissions for a Swift container.
 	 *
-	 * @see http://swift.openstack.org/misc.html#acls
+	 * @see http://docs.openstack.org/developer/swift/misc.html#acls
 	 *
 	 * In general, we don't allow listings to end-users. It's not useful, isn't well-defined
 	 * (lists are truncated to 10000 item with no way to page), and is just a performance risk.
@@ -1673,8 +1671,11 @@ class SwiftFileBackend extends FileBackendStore {
 				if ( $rcode >= 200 && $rcode <= 299 ) { // OK
 					$this->authCreds = [
 						'auth_token' => $rhdrs['x-auth-token'],
-						'storage_url' => $rhdrs['x-storage-url']
+						'storage_url' => ( $this->swiftStorageUrl !== null )
+							? $this->swiftStorageUrl
+							: $rhdrs['x-storage-url']
 					];
+
 					$this->srvCache->set( $cacheKey, $this->authCreds, ceil( $this->authTTL / 2 ) );
 					$this->authSessionTimestamp = time();
 				} elseif ( $rcode === 401 ) {
@@ -1702,7 +1703,7 @@ class SwiftFileBackend extends FileBackendStore {
 	 * @param array $creds From getAuthentication()
 	 * @param string $container
 	 * @param string $object
-	 * @return array
+	 * @return string
 	 */
 	protected function storageUrl( array $creds, $container = null, $object = null ) {
 		$parts = [ $creds['storage_url'] ];
@@ -1887,7 +1888,7 @@ abstract class SwiftFileBackendList implements Iterator {
 	 *
 	 * @param string $container Resolved container name
 	 * @param string $dir Resolved path relative to container
-	 * @param string $after
+	 * @param string &$after
 	 * @param int $limit
 	 * @param array $params
 	 * @return Traversable|array

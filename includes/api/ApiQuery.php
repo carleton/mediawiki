@@ -24,6 +24,8 @@
  * @file
  */
 
+use Wikimedia\Rdbms\IDatabase;
+
 /**
  * This is the main query class. It behaves similar to ApiMain: based on the
  * parameters given, it will create a list of titles to work on (an ApiPageSet
@@ -167,8 +169,8 @@ class ApiQuery extends ApiBase {
 	 * as the first, regardless of the values of $db and $groups
 	 * @param string $name Name to assign to the database connection
 	 * @param int $db One of the DB_* constants
-	 * @param array $groups Query groups
-	 * @return Database
+	 * @param string|string[] $groups Query groups
+	 * @return IDatabase
 	 */
 	public function getNamedDB( $name, $db, $groups ) {
 		if ( !array_key_exists( $name, $this->mNamedDB ) ) {
@@ -243,7 +245,7 @@ class ApiQuery extends ApiBase {
 		$cacheMode = $this->mPageSet->getCacheMode();
 
 		// Execute all unfinished modules
-		/** @var $module ApiQueryBase */
+		/** @var ApiQueryBase $module */
 		foreach ( $modules as $module ) {
 			$params = $module->extractRequestParams();
 			$cacheMode = $this->mergeCacheMode(
@@ -310,7 +312,7 @@ class ApiQuery extends ApiBase {
 					ApiBase::dieDebug( __METHOD__, 'Error instantiating module' );
 				}
 				if ( !$wasPosted && $instance->mustBePosted() ) {
-					$this->dieUsageMsgOrDebug( [ 'mustbeposted', $moduleName ] );
+					$this->dieWithErrorOrDebug( [ 'apierror-mustbeposted', $moduleName ] );
 				}
 				// Ignore duplicates. TODO 2.0: die()?
 				if ( !array_key_exists( $moduleName, $modules ) ) {
@@ -379,7 +381,7 @@ class ApiQuery extends ApiBase {
 			];
 		}
 		// Report special pages
-		/** @var $title Title */
+		/** @var Title $title */
 		foreach ( $pageSet->getSpecialTitles() as $fakeId => $title ) {
 			$vals = [];
 			ApiQueryBase::addTitleInfo( $vals, $title );
@@ -415,11 +417,7 @@ class ApiQuery extends ApiBase {
 		}
 
 		if ( !$fit ) {
-			$this->dieUsage(
-				'The value of $wgAPIMaxResultSize on this wiki is ' .
-					'too small to hold basic result information',
-				'badconfig'
-			);
+			$this->dieWithError( 'apierror-badconfig-resulttoosmall', 'badconfig' );
 		}
 
 		if ( $this->mParams['export'] ) {
@@ -436,7 +434,7 @@ class ApiQuery extends ApiBase {
 		$titles = $pageSet->getGoodTitles();
 		if ( count( $titles ) ) {
 			$user = $this->getUser();
-			/** @var $title Title */
+			/** @var Title $title */
 			foreach ( $titles as $title ) {
 				if ( $title->userCan( 'read', $user ) ) {
 					$exportTitles[] = $title;
@@ -461,6 +459,7 @@ class ApiQuery extends ApiBase {
 			// Raw formatter will handle this
 			$result->addValue( null, 'text', $sink, ApiResult::NO_SIZE_CHECK );
 			$result->addValue( null, 'mime', 'text/xml', ApiResult::NO_SIZE_CHECK );
+			$result->addValue( null, 'filename', 'export.xml', ApiResult::NO_SIZE_CHECK );
 		} else {
 			$result->addValue( 'query', 'export', $sink, ApiResult::NO_SIZE_CHECK );
 			$result->addValue( 'query', ApiResult::META_BC_SUBELEMENTS, [ 'export' ] );
@@ -540,10 +539,10 @@ class ApiQuery extends ApiBase {
 
 	public function getHelpUrls() {
 		return [
-			'https://www.mediawiki.org/wiki/API:Query',
-			'https://www.mediawiki.org/wiki/API:Meta',
-			'https://www.mediawiki.org/wiki/API:Properties',
-			'https://www.mediawiki.org/wiki/API:Lists',
+			'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Query',
+			'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Meta',
+			'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Properties',
+			'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Lists',
 		];
 	}
 }

@@ -147,6 +147,7 @@ class HTMLForm extends ContextSource {
 		'namespaceselect' => 'HTMLSelectNamespace',
 		'namespaceselectwithbutton' => 'HTMLSelectNamespaceWithButton',
 		'tagfilter' => 'HTMLTagFilter',
+		'sizefilter' => 'HTMLSizeFilterField',
 		'submit' => 'HTMLSubmitField',
 		'hidden' => 'HTMLHiddenField',
 		'edittools' => 'HTMLEditTools',
@@ -164,6 +165,7 @@ class HTMLForm extends ContextSource {
 		'url' => 'HTMLTextField',
 		'title' => 'HTMLTitleTextField',
 		'user' => 'HTMLUserTextField',
+		'usersmultiselect' => 'HTMLUsersMultiselectField',
 	];
 
 	public $mFieldData;
@@ -269,7 +271,7 @@ class HTMLForm extends ContextSource {
 	 * Construct a HTMLForm object for given display type. May return a HTMLForm subclass.
 	 *
 	 * @param string $displayFormat
-	 * @param mixed $arguments... Additional arguments to pass to the constructor.
+	 * @param mixed $arguments,... Additional arguments to pass to the constructor.
 	 * @return HTMLForm
 	 */
 	public static function factory( $displayFormat/*, $arguments...*/ ) {
@@ -283,7 +285,7 @@ class HTMLForm extends ContextSource {
 				return ObjectFactory::constructClassInstance( OOUIHTMLForm::class, $arguments );
 			default:
 				/** @var HTMLForm $form */
-				$form = ObjectFactory::constructClassInstance( HTMLForm::class, $arguments );
+				$form = ObjectFactory::constructClassInstance( self::class, $arguments );
 				$form->setDisplayFormat( $displayFormat );
 				return $form;
 		}
@@ -398,7 +400,13 @@ class HTMLForm extends ContextSource {
 
 		if ( !in_array( $format, $this->availableDisplayFormats, true ) ) {
 			throw new MWException( 'Display format must be one of ' .
-				print_r( $this->availableDisplayFormats, true ) );
+				print_r(
+					array_merge(
+						$this->availableDisplayFormats,
+						$this->availableSubclassDisplayFormats
+					),
+					true
+				) );
 		}
 
 		// Evil hack for mobile :(
@@ -442,7 +450,7 @@ class HTMLForm extends ContextSource {
 	 * @since 1.23
 	 *
 	 * @param string $fieldname Name of the field
-	 * @param array $descriptor Input Descriptor, as described above
+	 * @param array &$descriptor Input Descriptor, as described above
 	 *
 	 * @throws MWException
 	 * @return string Name of a HTMLFormField subclass
@@ -603,10 +611,14 @@ class HTMLForm extends ContextSource {
 	 */
 	public function trySubmit() {
 		$valid = true;
-		$hoistedErrors = [];
-		$hoistedErrors[] = isset( $this->mValidationErrorMessage )
-			? $this->mValidationErrorMessage
-			: [ 'htmlform-invalid-input' ];
+		$hoistedErrors = Status::newGood();
+		if ( $this->mValidationErrorMessage ) {
+			foreach ( (array)$this->mValidationErrorMessage as $error ) {
+				call_user_func_array( [ $hoistedErrors, 'fatal' ], $error );
+			}
+		} else {
+			$hoistedErrors->fatal( 'htmlform-invalid-input' );
+		}
 
 		$this->mWasSubmitted = true;
 
@@ -633,15 +645,16 @@ class HTMLForm extends ContextSource {
 			if ( $res !== true ) {
 				$valid = false;
 				if ( $res !== false && !$field->canDisplayErrors() ) {
-					$hoistedErrors[] = [ 'rawmessage', $res ];
+					if ( is_string( $res ) ) {
+						$hoistedErrors->fatal( 'rawmessage', $res );
+					} else {
+						$hoistedErrors->fatal( $res );
+					}
 				}
 			}
 		}
 
 		if ( !$valid ) {
-			if ( count( $hoistedErrors ) === 1 ) {
-				$hoistedErrors = $hoistedErrors[0];
-			}
 			return $hoistedErrors;
 		}
 
@@ -1041,6 +1054,7 @@ class HTMLForm extends ContextSource {
 			: 'application/x-www-form-urlencoded';
 		# Attributes
 		$attribs = [
+			'class' => 'mw-htmlform',
 			'action' => $this->getAction(),
 			'method' => $this->getMethod(),
 			'enctype' => $encType,
@@ -1053,6 +1067,9 @@ class HTMLForm extends ContextSource {
 		}
 		if ( $this->mName ) {
 			$attribs['name'] = $this->mName;
+		}
+		if ( $this->needsJSForHtml5FormValidation() ) {
+			$attribs['novalidate'] = true;
 		}
 		return $attribs;
 	}
@@ -1073,7 +1090,7 @@ class HTMLForm extends ContextSource {
 
 		return Html::rawElement(
 			'form',
-			$this->getFormAttributes() + [ 'class' => 'visualClear' ],
+			$this->getFormAttributes(),
 			$html
 		);
 	}
@@ -1248,7 +1265,7 @@ class HTMLForm extends ContextSource {
 	 *
 	 * @param string|array|Status $elements The set of errors/warnings to process.
 	 * @param string $elementsType Should warnings or errors be returned.  This is meant
-	 * 	for Status objects, all other valid types are always considered as errors.
+	 *     for Status objects, all other valid types are always considered as errors.
 	 * @return string
 	 */
 	public function getErrorsOrWarnings( $elements, $elementsType ) {
@@ -1675,7 +1692,7 @@ class HTMLForm extends ContextSource {
 
 					$attributes = [];
 					if ( $fieldsetIDPrefix ) {
-						$attributes['id'] = Sanitizer::escapeId( "$fieldsetIDPrefix$key" );
+						$attributes['id'] = Sanitizer::escapeIdForAttribute( "$fieldsetIDPrefix$key" );
 					}
 					$subsectionHtml .= $this->wrapFieldSetSection( $legend, $section, $attributes );
 				} else {
@@ -1724,7 +1741,7 @@ class HTMLForm extends ContextSource {
 		];
 
 		if ( $sectionName ) {
-			$attribs['id'] = Sanitizer::escapeId( $sectionName );
+			$attribs['id'] = Sanitizer::escapeIdForAttribute( $sectionName );
 		}
 
 		if ( $displayFormat === 'table' ) {
@@ -1868,5 +1885,23 @@ class HTMLForm extends ContextSource {
 	 */
 	protected function getMessage( $value ) {
 		return Message::newFromSpecifier( $value )->setContext( $this );
+	}
+
+	/**
+	 * Whether this form, with its current fields, requires the user agent to have JavaScript enabled
+	 * for the client-side HTML5 form validation to work correctly. If this function returns true, a
+	 * 'novalidate' attribute will be added on the `<form>` element. It will be removed if the user
+	 * agent has JavaScript support, in htmlform.js.
+	 *
+	 * @return bool
+	 * @since 1.29
+	 */
+	public function needsJSForHtml5FormValidation() {
+		foreach ( $this->mFlatFields as $fieldname => $field ) {
+			if ( $field->needsJSForHtml5FormValidation() ) {
+				return true;
+			}
+		}
+		return false;
 	}
 }

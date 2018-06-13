@@ -95,7 +95,7 @@ class HHVMMakeRepo extends Maintenance {
 		print "Found " . count( $files ) . " files in " .
 			count( $dirs ) . " directories\n";
 
-		$tmpDir = wfTempDir() . '/mw-make-repo' . mt_rand( 0, 1<<31 );
+		$tmpDir = wfTempDir() . '/mw-make-repo' . mt_rand( 0, 1 << 31 );
 		if ( !mkdir( $tmpDir ) ) {
 			$this->error( 'Unable to create temporary directory', 1 );
 		}
@@ -106,7 +106,7 @@ class HHVMMakeRepo extends Maintenance {
 		$cmd = wfEscapeShellArg(
 			$hhvm,
 			'--hphp',
-		    '--target', 'hhbc',
+			'--target', 'hhbc',
 			'--format', 'binary',
 			'--force', '1',
 			'--keep-tempdir', '1',

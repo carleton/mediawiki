@@ -26,7 +26,9 @@ use MediaWiki\Auth\AuthenticationResponse;
 use MediaWiki\Auth\AuthManager;
 use MediaWiki\Auth\Throttler;
 use MediaWiki\Logger\LoggerFactory;
+use MediaWiki\MediaWikiServices;
 use MediaWiki\Session\SessionManager;
+use Wikimedia\ScopedCallback;
 
 /**
  * Holds shared logic for login and account creation pages.
@@ -96,7 +98,7 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 
 	/**
 	 * Load basic request parameters for this Special page.
-	 * @param $subPage
+	 * @param string $subPage
 	 */
 	private function loadRequestParameters( $subPage ) {
 		if ( $this->mLoadedRequest ) {
@@ -149,14 +151,14 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 		$entryWarning = $this->msg( $request->getVal( 'warning', '' ) );
 		// bc: provide login link as a parameter for messages where the translation
 		// was not updated
-		$loginreqlink = Linker::linkKnown(
+		$loginreqlink = $this->getLinkRenderer()->makeKnownLink(
 			$this->getPageTitle(),
-			$this->msg( 'loginreqlink' )->escaped(),
+			$this->msg( 'loginreqlink' )->text(),
 			[],
 			[
 				'returnto' => $this->mReturnTo,
 				'returntoquery' => $this->mReturnToQuery,
-				'uselang' => $this->mLanguage,
+				'uselang' => $this->mLanguage ?: null,
 				'fromhttp' => $wgSecureLogin && $this->mFromHTTP ? '1' : null,
 			]
 		);
@@ -177,7 +179,7 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 
 		# 1. When switching accounts, it sucks to get automatically logged out
 		# 2. Do not return to PasswordReset after a successful password change
-		#    but goto Wiki start page (Main_Page) instead ( bug 33997 )
+		#    but goto Wiki start page (Main_Page) instead ( T35997 )
 		$returnToTitle = Title::newFromText( $this->mReturnTo );
 		if ( is_object( $returnToTitle )
 			&& ( $returnToTitle->isSpecial( 'Userlogout' )
@@ -212,6 +214,15 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 	 * @param string|null $subPage
 	 */
 	public function execute( $subPage ) {
+		if ( $this->mPosted ) {
+			$time = microtime( true );
+			$profilingScope = new ScopedCallback( function () use ( $time ) {
+				$time = microtime( true ) - $time;
+				$statsd = MediaWikiServices::getInstance()->getStatsdDataFactory();
+				$statsd->timing( "timing.login.ui.{$this->authAction}", $time * 1000 );
+			} );
+		}
+
 		$authManager = AuthManager::singleton();
 		$session = SessionManager::getGlobalSession();
 
@@ -556,7 +567,11 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 		}
 
 		// warning header for non-standard workflows (e.g. security reauthentication)
-		if ( !$this->isSignup() && $this->getUser()->isLoggedIn() ) {
+		if (
+			!$this->isSignup() &&
+			$this->getUser()->isLoggedIn() &&
+			$this->authAction !== AuthManager::ACTION_LOGIN_CONTINUE
+		) {
 			$reauthMessage = $this->securityLevel ? 'userlogin-reauth' : 'userlogin-loggedin';
 			$submitStatus->warning( $reauthMessage, $this->getUser()->getName() );
 		}
@@ -637,7 +652,7 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 	 * @return HTMLForm
 	 */
 	protected function getAuthForm( array $requests, $action, $msg = '', $msgType = 'error' ) {
-		global $wgSecureLogin, $wgLoginLanguageSelector;
+		global $wgSecureLogin;
 		// FIXME merge this with parent
 
 		if ( isset( $this->authForm ) ) {
@@ -663,7 +678,7 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 		$form = HTMLForm::factory( 'vform', $formDescriptor, $context );
 
 		$form->addHiddenField( 'authAction', $this->authAction );
-		if ( $wgLoginLanguageSelector ) {
+		if ( $this->mLanguage ) {
 			$form->addHiddenField( 'uselang', $this->mLanguage );
 		}
 		$form->addHiddenField( 'force', $this->securityLevel );
@@ -698,12 +713,12 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 	 */
 	protected function getFakeTemplate( $msg, $msgType ) {
 		global $wgAuth, $wgEnableEmail, $wgHiddenPrefs, $wgEmailConfirmToEdit, $wgEnableUserEmail,
-			   $wgSecureLogin, $wgLoginLanguageSelector, $wgPasswordResetRoutes;
+			$wgSecureLogin, $wgPasswordResetRoutes;
 
 		// make a best effort to get the value of fields which used to be fixed in the old login
 		// template but now might or might not exist depending on what providers are used
 		$request = $this->getRequest();
-		$data = (object) [
+		$data = (object)[
 			'mUsername' => $request->getText( 'wpName' ),
 			'mPassword' => $request->getText( 'wpPassword' ),
 			'mRetype' => $request->getText( 'wpRetype' ),
@@ -723,7 +738,7 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 		$user = $this->getUser();
 		$template = new FakeAuthTemplate();
 
-		// Pre-fill username (if not creating an account, bug 44775).
+		// Pre-fill username (if not creating an account, T46775).
 		if ( $data->mUsername == '' && $this->isSignup() ) {
 			if ( $user->isLoggedIn() ) {
 				$data->mUsername = $user->getName();
@@ -756,8 +771,8 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 		# Don't show a "create account" link if the user can't.
 		if ( $this->showCreateAccountLink() ) {
 			# Pass any language selection on to the mode switch link
-			if ( $wgLoginLanguageSelector && $this->mLanguage ) {
-				$linkq .= '&uselang=' . $this->mLanguage;
+			if ( $this->mLanguage ) {
+				$linkq .= '&uselang=' . urlencode( $this->mLanguage );
 			}
 			// Supply URL, login template creates the button.
 			$template->set( 'createOrLoginHref', $titleObj->getLocalURL( $linkq ) );
@@ -768,7 +783,7 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 		$resetLink = $this->isSignup()
 			? null
 			: is_array( $wgPasswordResetRoutes )
-			  && in_array( true, array_values( $wgPasswordResetRoutes ), true );
+				&& in_array( true, array_values( $wgPasswordResetRoutes ), true );
 
 		$template->set( 'header', '' );
 		$template->set( 'formheader', '' );
@@ -807,14 +822,21 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 		$wgAuth->modifyUITemplate( $template, $action );
 
 		$oldTemplate = $template;
-		$hookName = $this->isSignup() ? 'UserCreateForm' : 'UserLoginForm';
-		Hooks::run( $hookName, [ &$template ] );
-		if ( $oldTemplate !== $template ) {
-			wfDeprecated( "reference in $hookName hook", '1.27' );
+
+		// Both Hooks::run are explicit here to make findHooks.php happy
+		if ( $this->isSignup() ) {
+			Hooks::run( 'UserCreateForm', [ &$template ] );
+			if ( $oldTemplate !== $template ) {
+				wfDeprecated( "reference in UserCreateForm hook", '1.27' );
+			}
+		} else {
+			Hooks::run( 'UserLoginForm', [ &$template ] );
+			if ( $oldTemplate !== $template ) {
+				wfDeprecated( "reference in UserLoginForm hook", '1.27' );
+			}
 		}
 
 		return $template;
-
 	}
 
 	public function onAuthChangeFormFields(
@@ -881,7 +903,7 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 	 * @return array
 	 */
 	protected function getFieldDefinitions( $template ) {
-		global $wgEmailConfirmToEdit, $wgLoginLanguageSelector;
+		global $wgEmailConfirmToEdit;
 
 		$isLoggedIn = $this->getUser()->isLoggedIn();
 		$continuePart = $this->isContinued() ? 'continue-' : '';
@@ -1077,13 +1099,13 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 			// B/C for old extensions that haven't been converted to AuthManager (or have been
 			// but somebody is using the old version) and still use templates via the
 			// UserCreateForm/UserLoginForm hook.
-			// 'header' used by ConfirmEdit, CondfirmAccount, Persona, WikimediaIncubator, SemanticSignup
+			// 'header' used by ConfirmEdit, ConfirmAccount, Persona, WikimediaIncubator, SemanticSignup
 			// 'formheader' used by MobileFrontend
 			$fieldDefinitions['header'] = [
 				'type' => 'info',
 				'raw' => true,
 				'default' => $template->get( 'header' ) ?: $template->get( 'formheader' ),
-				'weight' => - 110,
+				'weight' => -110,
 			];
 		}
 		if ( $this->mEntryError ) {
@@ -1123,9 +1145,9 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 					'type' => 'info',
 					'raw' => true,
 					'cssclass' => 'mw-form-related-link-container',
-					'default' => Linker::link(
+					'default' => $this->getLinkRenderer()->makeLink(
 						SpecialPage::getTitleFor( 'PasswordReset' ),
-						$this->msg( 'userlogin-resetpassword-link' )->escaped()
+						$this->msg( 'userlogin-resetpassword-link' )->text()
 					),
 					'weight' => 230,
 				];
@@ -1134,11 +1156,11 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 			// Don't show a "create account" link if the user can't.
 			if ( $this->showCreateAccountLink() ) {
 				// link to the other action
-				$linkTitle = $this->getTitleFor( $this->isSignup() ? 'Userlogin' :'CreateAccount' );
+				$linkTitle = $this->getTitleFor( $this->isSignup() ? 'Userlogin' : 'CreateAccount' );
 				$linkq = $this->getReturnToQueryStringFragment();
 				// Pass any language selection on to the mode switch link
-				if ( $wgLoginLanguageSelector && $this->mLanguage ) {
-					$linkq .= '&uselang=' . $this->mLanguage;
+				if ( $this->mLanguage ) {
+					$linkq .= '&uselang=' . urlencode( $this->mLanguage );
 				}
 				$loggedIn = $this->getUser()->isLoggedIn();
 
@@ -1177,7 +1199,7 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 
 	/**
 	 * Adds fields provided via the deprecated UserLoginForm / UserCreateForm hooks
-	 * @param $fieldDefinitions array
+	 * @param array $fieldDefinitions
 	 * @param FakeAuthTemplate $template
 	 * @return array
 	 */
@@ -1225,6 +1247,7 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 	/**
 	 * Returns a string that can be appended to the URL (without encoding) to preserve the
 	 * return target. Does not include leading '?'/'&'.
+	 * @return string
 	 */
 	protected function getReturnToQueryStringFragment() {
 		$returnto = '';
@@ -1304,9 +1327,9 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 		$targetLanguage = Language::factory( $lang );
 		$attr['lang'] = $attr['hreflang'] = $targetLanguage->getHtmlCode();
 
-		return Linker::linkKnown(
+		return $this->getLinkRenderer()->makeKnownLink(
 			$this->getPageTitle(),
-			htmlspecialchars( $text ),
+			$text,
 			$attr,
 			$query
 		);
@@ -1317,7 +1340,8 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 	}
 
 	/**
-	 * @param array $formDescriptor
+	 * @param array &$formDescriptor
+	 * @param array $requests
 	 */
 	protected function postProcessFormDescriptor( &$formDescriptor, $requests ) {
 		// Pre-fill username (if not creating an account, T46775).
@@ -1373,6 +1397,11 @@ class FakeAuthTemplate extends BaseTemplate {
 	/**
 	 * Extensions (AntiSpoof and TitleBlacklist) call this in response to
 	 * UserCreateForm hook to add checkboxes to the create account form.
+	 * @param string $name
+	 * @param string $value
+	 * @param string $type
+	 * @param string $msg
+	 * @param string|bool $helptext
 	 */
 	public function addInputItem( $name, $value, $type, $msg, $helptext = false ) {
 		// use the same indexes as UserCreateForm just in case someone adds an item manually
@@ -1474,6 +1503,7 @@ class LoginForm extends SpecialPage {
 
 	/**
 	 * @deprecated since 1.27 - call LoginHelper::getValidErrorMessages instead.
+	 * @return array
 	 */
 	public static function getValidErrorMessages() {
 		return LoginHelper::getValidErrorMessages();
@@ -1481,6 +1511,8 @@ class LoginForm extends SpecialPage {
 
 	/**
 	 * @deprecated since 1.27 - don't use LoginForm, use AuthManager instead
+	 * @param string $username
+	 * @return array|false
 	 */
 	public static function incrementLoginThrottle( $username ) {
 		wfDeprecated( __METHOD__, "1.27" );
@@ -1492,6 +1524,8 @@ class LoginForm extends SpecialPage {
 
 	/**
 	 * @deprecated since 1.27 - don't use LoginForm, use AuthManager instead
+	 * @param string $username
+	 * @return bool|int
 	 */
 	public static function incLoginThrottle( $username ) {
 		wfDeprecated( __METHOD__, "1.27" );
@@ -1501,6 +1535,8 @@ class LoginForm extends SpecialPage {
 
 	/**
 	 * @deprecated since 1.27 - don't use LoginForm, use AuthManager instead
+	 * @param string $username
+	 * @return void
 	 */
 	public static function clearLoginThrottle( $username ) {
 		wfDeprecated( __METHOD__, "1.27" );
@@ -1537,6 +1573,7 @@ class LoginForm extends SpecialPage {
 
 	/**
 	 * @deprecated since 1.27 - don't use LoginForm, use AuthManager instead
+	 * @return string
 	 */
 	public static function getCreateaccountToken() {
 		wfDeprecated( __METHOD__, '1.27' );

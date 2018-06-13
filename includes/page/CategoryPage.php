@@ -54,7 +54,10 @@ class CategoryPage extends Article {
 			return;
 		}
 
-		if ( !Hooks::run( 'CategoryPageView', [ &$this ] ) ) {
+		// Avoid PHP 7.1 warning of passing $this by reference
+		$categoryPage = $this;
+
+		if ( !Hooks::run( 'CategoryPageView', [ &$categoryPage ] ) ) {
 			return;
 		}
 
@@ -113,5 +116,13 @@ class CategoryPage extends Article {
 		$out = $this->getContext()->getOutput();
 		$out->addHTML( $viewer->getHTML() );
 		$this->addHelpLink( 'Help:Categories' );
+	}
+
+	function getCategoryViewerClass() {
+		return $this->mCategoryViewerClass;
+	}
+
+	function setCategoryViewerClass( $class ) {
+		$this->mCategoryViewerClass = $class;
 	}
 }

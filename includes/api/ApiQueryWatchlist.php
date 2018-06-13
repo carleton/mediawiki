@@ -34,6 +34,9 @@ use MediaWiki\MediaWikiServices;
  */
 class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 
+	/** @var CommentStore */
+	private $commentStore;
+
 	public function __construct( ApiQuery $query, $moduleName ) {
 		parent::__construct( $query, $moduleName, 'wl' );
 	}
@@ -82,8 +85,12 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 
 			if ( $this->fld_patrol ) {
 				if ( !$user->useRCPatrol() && !$user->useNPPatrol() ) {
-					$this->dieUsage( 'patrol property is not available', 'patrol' );
+					$this->dieWithError( 'apierror-permissiondenied-patrolflag', 'patrol' );
 				}
+			}
+
+			if ( $this->fld_comment || $this->fld_parsedcomment ) {
+				$this->commentStore = new CommentStore( 'rc_comment' );
 			}
 		}
 
@@ -106,13 +113,14 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 			$options['end'] = $params['end'];
 		}
 
+		$startFrom = null;
 		if ( !is_null( $params['continue'] ) ) {
 			$cont = explode( '|', $params['continue'] );
 			$this->dieContinueUsageIf( count( $cont ) != 2 );
 			$continueTimestamp = $cont[0];
 			$continueId = (int)$cont[1];
 			$this->dieContinueUsageIf( $continueId != $cont[1] );
-			$options['startFrom'] = [ $continueTimestamp, $continueId ];
+			$startFrom = [ $continueTimestamp, $continueId ];
 		}
 
 		if ( $wlowner !== $user ) {
@@ -133,7 +141,7 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 
 			/* Check for conflicting parameters. */
 			if ( $this->showParamsConflicting( $show ) ) {
-				$this->dieUsageMsg( 'show' );
+				$this->dieWithError( 'apierror-show' );
 			}
 
 			// Check permissions.
@@ -141,10 +149,7 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 				|| isset( $show[WatchedItemQueryService::FILTER_NOT_PATROLLED] )
 			) {
 				if ( !$user->useRCPatrol() && !$user->useNPPatrol() ) {
-					$this->dieUsage(
-						'You need the patrol right to request the patrolled flag',
-						'permissiondenied'
-					);
+					$this->dieWithError( 'apierror-permissiondenied-patrolflag', 'permissiondenied' );
 				}
 			}
 
@@ -153,15 +158,16 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 
 		if ( !is_null( $params['type'] ) ) {
 			try {
-				$options['rcTypes'] = RecentChange::parseToRCType( $params['type'] );
+				$rcTypes = RecentChange::parseToRCType( $params['type'] );
+				if ( $rcTypes ) {
+					$options['rcTypes'] = $rcTypes;
+				}
 			} catch ( Exception $e ) {
 				ApiBase::dieDebug( __METHOD__, $e->getMessage() );
 			}
 		}
 
-		if ( !is_null( $params['user'] ) && !is_null( $params['excludeuser'] ) ) {
-			$this->dieUsage( 'user and excludeuser cannot be used together', 'user-excludeuser' );
-		}
+		$this->requireMaxOneParameter( $params, 'user', 'excludeuser' );
 		if ( !is_null( $params['user'] ) ) {
 			$options['onlyByUser'] = $params['user'];
 		}
@@ -169,33 +175,24 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 			$options['notByUser'] = $params['excludeuser'];
 		}
 
-		$options['limit'] = $params['limit'] + 1;
+		$options['limit'] = $params['limit'];
+
+		Hooks::run( 'ApiQueryWatchlistPrepareWatchedItemQueryServiceOptions', [
+			$this, $params, &$options
+		] );
 
 		$ids = [];
 		$count = 0;
 		$watchedItemQuery = MediaWikiServices::getInstance()->getWatchedItemQueryService();
-		$items = $watchedItemQuery->getWatchedItemsWithRecentChangeInfo( $wlowner, $options );
+		$items = $watchedItemQuery->getWatchedItemsWithRecentChangeInfo( $wlowner, $options, $startFrom );
 
-		foreach ( $items as list ( $watchedItem, $recentChangeInfo ) ) {
+		foreach ( $items as list( $watchedItem, $recentChangeInfo ) ) {
 			/** @var WatchedItem $watchedItem */
-			if ( ++$count > $params['limit'] ) {
-				// We've reached the one extra which shows that there are
-				// additional pages to be had. Stop here...
-				$this->setContinueEnumParameter(
-					'continue',
-					$recentChangeInfo['rc_timestamp'] . '|' . $recentChangeInfo['rc_id']
-				);
-				break;
-			}
-
 			if ( is_null( $resultPageSet ) ) {
 				$vals = $this->extractOutputData( $watchedItem, $recentChangeInfo );
 				$fit = $this->getResult()->addValue( [ 'query', $this->getModuleName() ], null, $vals );
 				if ( !$fit ) {
-					$this->setContinueEnumParameter(
-						'continue',
-						$recentChangeInfo['rc_timestamp'] . '|' . $recentChangeInfo['rc_id']
-					);
+					$startFrom = [ $recentChangeInfo['rc_timestamp'], $recentChangeInfo['rc_id'] ];
 					break;
 				}
 			} else {
@@ -205,6 +202,10 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 					$ids[] = intval( $recentChangeInfo['rc_cur_id'] );
 				}
 			}
+		}
+
+		if ( $startFrom !== null ) {
+			$this->setContinueEnumParameter( 'continue', implode( '|', $startFrom ) );
 		}
 
 		if ( is_null( $resultPageSet ) ) {
@@ -260,10 +261,7 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 
 	private function extractOutputData( WatchedItem $watchedItem, array $recentChangeInfo ) {
 		/* Determine the title of the page that has been changed. */
-		$title = Title::makeTitle(
-			$watchedItem->getLinkTarget()->getNamespace(),
-			$watchedItem->getLinkTarget()->getDBkey()
-		);
+		$title = Title::newFromLinkTarget( $watchedItem->getLinkTarget() );
 		$user = $this->getUser();
 
 		/* Our output data. */
@@ -359,12 +357,13 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 				Revision::DELETED_COMMENT,
 				$user
 			) ) {
-				if ( $this->fld_comment && isset( $recentChangeInfo['rc_comment'] ) ) {
-					$vals['comment'] = $recentChangeInfo['rc_comment'];
+				$comment = $this->commentStore->getComment( $recentChangeInfo )->text;
+				if ( $this->fld_comment ) {
+					$vals['comment'] = $comment;
 				}
 
-				if ( $this->fld_parsedcomment && isset( $recentChangeInfo['rc_comment'] ) ) {
-					$vals['parsedcomment'] = Linker::formatComment( $recentChangeInfo['rc_comment'], $title );
+				if ( $this->fld_parsedcomment ) {
+					$vals['parsedcomment'] = Linker::formatComment( $comment, $title );
 				}
 			}
 		}
@@ -395,6 +394,10 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 		if ( $anyHidden && ( $recentChangeInfo['rc_deleted'] & Revision::DELETED_RESTRICTED ) ) {
 			$vals['suppressed'] = true;
 		}
+
+		Hooks::run( 'ApiQueryWatchlistExtractOutputData', [
+			$this, $watchedItem, $recentChangeInfo, &$vals
+		] );
 
 		return $vals;
 	}
@@ -504,6 +507,6 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 	}
 
 	public function getHelpUrls() {
-		return 'https://www.mediawiki.org/wiki/API:Watchlist';
+		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Watchlist';
 	}
 }

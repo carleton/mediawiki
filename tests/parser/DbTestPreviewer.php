@@ -29,6 +29,8 @@ class DbTestPreviewer extends TestRecorder {
 
 	/**
 	 * This should be called before the table prefix is changed
+	 * @param IDatabase $db
+	 * @param bool|string $filter
 	 */
 	function __construct( $db, $filter = false ) {
 		$this->db = $db;
@@ -93,7 +95,7 @@ class DbTestPreviewer extends TestRecorder {
 					$before = 'n';
 				} elseif ( $prevResults[$test] == 1 ) {
 					$before = 'p';
-				} else /* if ( $prevResults[$test] == 0 )*/ {
+				} else /* if ( $prevResults[$test] == 0 ) */ {
 					$before = 'f';
 				}
 
@@ -101,7 +103,7 @@ class DbTestPreviewer extends TestRecorder {
 					$after = 'n';
 				} elseif ( $this->results[$test] == 1 ) {
 					$after = 'p';
-				} else /*if ( $this->results[$test] == 0 ) */ {
+				} else /* if ( $this->results[$test] == 0 ) */ {
 					$after = 'f';
 				}
 
@@ -201,4 +203,3 @@ class DbTestPreviewer extends TestRecorder {
 			. " and $postDate";
 	}
 }
-

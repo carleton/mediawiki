@@ -33,6 +33,7 @@ abstract class ApiFormatBase extends ApiBase {
 	private $mIsHtml, $mFormat, $mUnescapeAmps, $mHelp;
 	private $mBuffer, $mDisabled = false;
 	private $mIsWrappedHtml = false;
+	private $mHttpStatus = false;
 	protected $mForceDefaultParams = false;
 
 	/**
@@ -62,6 +63,26 @@ abstract class ApiFormatBase extends ApiBase {
 	 * @return string
 	 */
 	abstract public function getMimeType();
+
+	/**
+	 * Return a filename for this module's output.
+	 * @note If $this->getIsWrappedHtml() || $this->getIsHtml(), you'll very
+	 *  likely want to fall back to this class's version.
+	 * @since 1.27
+	 * @return string Generally this should be "api-result.$ext", and must be
+	 *  encoded for inclusion in a Content-Disposition header's filename parameter.
+	 */
+	public function getFilename() {
+		if ( $this->getIsWrappedHtml() ) {
+			return 'api-result-wrapped.json';
+		} elseif ( $this->getIsHtml() ) {
+			return 'api-result.html';
+		} else {
+			$exts = MimeMagic::singleton()->getExtensionsForType( $this->getMimeType() );
+			$ext = $exts ? strtok( $exts, ' ' ) : strtolower( $this->mFormat );
+			return "api-result.$ext";
+		}
+	}
 
 	/**
 	 * Get the internal format name
@@ -131,6 +152,7 @@ abstract class ApiFormatBase extends ApiBase {
 
 	/**
 	 * Overridden to honor $this->forceDefaultParams(), if applicable
+	 * @inheritDoc
 	 * @since 1.26
 	 */
 	protected function getParameterFromSettings( $paramName, $paramSettings, $parseLimit ) {
@@ -144,6 +166,23 @@ abstract class ApiFormatBase extends ApiBase {
 			return $paramSettings[self::PARAM_DFLT];
 		} else {
 			return null;
+		}
+	}
+
+	/**
+	 * Set the HTTP status code to be used for the response
+	 * @since 1.29
+	 * @param int $code
+	 */
+	public function setHttpStatus( $code ) {
+		if ( $this->mDisabled ) {
+			return;
+		}
+
+		if ( $this->getIsHtml() ) {
+			$this->mHttpStatus = $code;
+		} else {
+			$this->getMain()->getRequest()->response()->statusHeader( $code );
 		}
 	}
 
@@ -168,11 +207,18 @@ abstract class ApiFormatBase extends ApiBase {
 
 		$this->getMain()->getRequest()->response()->header( "Content-Type: $mime; charset=utf-8" );
 
-		// Set X-Frame-Options API results (bug 39180)
+		// Set X-Frame-Options API results (T41180)
 		$apiFrameOptions = $this->getConfig()->get( 'ApiFrameOptions' );
 		if ( $apiFrameOptions ) {
 			$this->getMain()->getRequest()->response()->header( "X-Frame-Options: $apiFrameOptions" );
 		}
+
+		// Set a Content-Disposition header so something downloading an API
+		// response uses a halfway-sensible filename (T128209).
+		$filename = $this->getFilename();
+		$this->getMain()->getRequest()->response()->header(
+			"Content-Disposition: inline; filename=\"{$filename}\""
+		);
 	}
 
 	/**
@@ -201,7 +247,14 @@ abstract class ApiFormatBase extends ApiBase {
 			if ( !$this->getIsWrappedHtml() ) {
 				// When the format without suffix 'fm' is defined, there is a non-html version
 				if ( $this->getMain()->getModuleManager()->isDefined( $lcformat, 'format' ) ) {
-					$msg = $context->msg( 'api-format-prettyprint-header' )->params( $format, $lcformat );
+					if ( !$this->getRequest()->wasPosted() ) {
+						$nonHtmlUrl = strtok( $this->getRequest()->getFullRequestURL(), '?' )
+							. '?' . $this->getRequest()->appendQueryValue( 'format', $lcformat );
+						$msg = $context->msg( 'api-format-prettyprint-header-hyperlinked' )
+							->params( $format, $lcformat, $nonHtmlUrl );
+					} else {
+						$msg = $context->msg( 'api-format-prettyprint-header' )->params( $format, $lcformat );
+					}
 				} else {
 					$msg = $context->msg( 'api-format-prettyprint-header-only-html' )->params( $format );
 				}
@@ -212,6 +265,18 @@ abstract class ApiFormatBase extends ApiBase {
 						ApiHelp::fixHelpLinks( $header )
 					)
 				);
+
+				if ( $this->mHttpStatus && $this->mHttpStatus !== 200 ) {
+					$out->addHTML(
+						Html::rawElement( 'div', [ 'class' => 'api-pretty-header api-pretty-status' ],
+							$this->msg(
+								'api-format-prettyprint-status',
+								$this->mHttpStatus,
+								HttpStatus::getMessage( $this->mHttpStatus )
+							)->parse()
+						)
+					);
+				}
 			}
 
 			if ( Hooks::run( 'ApiFormatHighlight', [ $context, $result, $mime, $format ] ) ) {
@@ -225,6 +290,8 @@ abstract class ApiFormatBase extends ApiBase {
 				$time = microtime( true ) - $this->getConfig()->get( 'RequestTime' );
 				$json = FormatJson::encode(
 					[
+						'status' => (int)( $this->mHttpStatus ?: 200 ),
+						'statustext' => HttpStatus::getMessage( $this->mHttpStatus ?: 200 ),
 						'html' => $out->getHTML(),
 						'modules' => array_values( array_unique( array_merge(
 							$out->getModules(),
@@ -237,7 +304,7 @@ abstract class ApiFormatBase extends ApiBase {
 					false, FormatJson::ALL_OK
 				);
 
-				// Bug 66776: wfMangleFlashPolicy() is needed to avoid a nasty bug in
+				// T68776: wfMangleFlashPolicy() is needed to avoid a nasty bug in
 				// Flash, but what it does isn't friendly for the API, so we need to
 				// work around it.
 				if ( preg_match( '/\<\s*cross-domain-policy\s*\>/i', $json ) ) {
@@ -298,7 +365,7 @@ abstract class ApiFormatBase extends ApiBase {
 	}
 
 	public function getHelpUrls() {
-		return 'https://www.mediawiki.org/wiki/API:Data_formats';
+		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Data_formats';
 	}
 
 }

@@ -36,7 +36,7 @@ class ApiQueryContributions extends ApiQueryBase {
 	}
 
 	private $params, $prefixMode, $userprefix, $multiUserMode, $idMode, $usernames, $userids,
-		$parentLens;
+		$parentLens, $commentStore;
 	private $fld_ids = false, $fld_title = false, $fld_timestamp = false,
 		$fld_comment = false, $fld_parsedcomment = false, $fld_flags = false,
 		$fld_patrolled = false, $fld_tags = false, $fld_size = false, $fld_sizediff = false;
@@ -44,6 +44,8 @@ class ApiQueryContributions extends ApiQueryBase {
 	public function execute() {
 		// Parse some parameters
 		$this->params = $this->extractRequestParams();
+
+		$this->commentStore = new CommentStore( 'rev_comment' );
 
 		$prop = array_flip( $this->params['prop'] );
 		$this->fld_ids = isset( $prop['ids'] );
@@ -65,24 +67,48 @@ class ApiQueryContributions extends ApiQueryBase {
 		// TODO: if the query is going only against the revision table, should this be done?
 		$this->selectNamedDB( 'contributions', DB_REPLICA, 'contributions' );
 
+		$this->requireOnlyOneParameter( $this->params, 'userprefix', 'userids', 'user' );
+
 		$this->idMode = false;
 		if ( isset( $this->params['userprefix'] ) ) {
 			$this->prefixMode = true;
 			$this->multiUserMode = true;
 			$this->userprefix = $this->params['userprefix'];
+		} elseif ( isset( $this->params['userids'] ) ) {
+			$this->userids = [];
+
+			if ( !count( $this->params['userids'] ) ) {
+				$encParamName = $this->encodeParamName( 'userids' );
+				$this->dieWithError( [ 'apierror-paramempty', $encParamName ], "paramempty_$encParamName" );
+			}
+
+			foreach ( $this->params['userids'] as $uid ) {
+				if ( $uid <= 0 ) {
+					$this->dieWithError( [ 'apierror-invaliduserid', $uid ], 'invaliduserid' );
+				}
+
+				$this->userids[] = $uid;
+			}
+
+			$this->prefixMode = false;
+			$this->multiUserMode = ( count( $this->params['userids'] ) > 1 );
+			$this->idMode = true;
 		} else {
 			$anyIPs = false;
 			$this->userids = [];
 			$this->usernames = [];
-			if ( !is_array( $this->params['user'] ) ) {
-				$this->params['user'] = [ $this->params['user'] ];
-			}
 			if ( !count( $this->params['user'] ) ) {
-				$this->dieUsage( 'User parameter may not be empty.', 'param_user' );
+				$encParamName = $this->encodeParamName( 'user' );
+				$this->dieWithError(
+					[ 'apierror-paramempty', $encParamName ], "paramempty_$encParamName"
+				);
 			}
 			foreach ( $this->params['user'] as $u ) {
-				if ( is_null( $u ) || $u === '' ) {
-					$this->dieUsage( 'User parameter may not be empty', 'param_user' );
+				if ( $u === '' ) {
+					$encParamName = $this->encodeParamName( 'user' );
+					$this->dieWithError(
+						[ 'apierror-paramempty', $encParamName ], "paramempty_$encParamName"
+					);
 				}
 
 				if ( User::isIP( $u ) ) {
@@ -91,7 +117,10 @@ class ApiQueryContributions extends ApiQueryBase {
 				} else {
 					$name = User::getCanonicalName( $u, 'valid' );
 					if ( $name === false ) {
-						$this->dieUsage( "User name {$u} is not valid", 'param_user' );
+						$encParamName = $this->encodeParamName( 'user' );
+						$this->dieWithError(
+							[ 'apierror-baduser', $encParamName, wfEscapeWikiText( $u ) ], "baduser_$encParamName"
+						);
 					}
 					$this->usernames[] = $name;
 				}
@@ -254,7 +283,7 @@ class ApiQueryContributions extends ApiQueryBase {
 				|| ( isset( $show['top'] ) && isset( $show['!top'] ) )
 				|| ( isset( $show['new'] ) && isset( $show['!new'] ) )
 			) {
-				$this->dieUsageMsg( 'show' );
+				$this->dieWithError( 'apierror-show' );
 			}
 
 			$this->addWhereIf( 'rev_minor_edit = 0', isset( $show['!minor'] ) );
@@ -285,10 +314,7 @@ class ApiQueryContributions extends ApiQueryBase {
 			$this->fld_patrolled
 		) {
 			if ( !$user->useRCPatrol() && !$user->useNPPatrol() ) {
-				$this->dieUsage(
-					'You need the patrol right to request the patrolled flag',
-					'permissiondenied'
-				);
+				$this->dieWithError( 'apierror-permissiondenied-patrolflag', 'permissiondenied' );
 			}
 
 			// Use a redundant join condition on both
@@ -317,11 +343,17 @@ class ApiQueryContributions extends ApiQueryBase {
 		$this->addFieldsIf( 'rev_page', $this->fld_ids );
 		$this->addFieldsIf( 'page_latest', $this->fld_flags );
 		// $this->addFieldsIf( 'rev_text_id', $this->fld_ids ); // Should this field be exposed?
-		$this->addFieldsIf( 'rev_comment', $this->fld_comment || $this->fld_parsedcomment );
 		$this->addFieldsIf( 'rev_len', $this->fld_size || $this->fld_sizediff );
 		$this->addFieldsIf( 'rev_minor_edit', $this->fld_flags );
 		$this->addFieldsIf( 'rev_parent_id', $this->fld_flags || $this->fld_sizediff || $this->fld_ids );
 		$this->addFieldsIf( 'rc_patrolled', $this->fld_patrolled );
+
+		if ( $this->fld_comment || $this->fld_parsedcomment ) {
+			$commentQuery = $this->commentStore->getJoin();
+			$this->addTables( $commentQuery['tables'] );
+			$this->addFields( $commentQuery['fields'] );
+			$this->addJoinConds( $commentQuery['joins'] );
+		}
 
 		if ( $this->fld_tags ) {
 			$this->addTables( 'tag_summary' );
@@ -392,7 +424,7 @@ class ApiQueryContributions extends ApiQueryBase {
 			$vals['top'] = $row->page_latest == $row->rev_id;
 		}
 
-		if ( ( $this->fld_comment || $this->fld_parsedcomment ) && isset( $row->rev_comment ) ) {
+		if ( $this->fld_comment || $this->fld_parsedcomment ) {
 			if ( $row->rev_deleted & Revision::DELETED_COMMENT ) {
 				$vals['commenthidden'] = true;
 				$anyHidden = true;
@@ -404,12 +436,13 @@ class ApiQueryContributions extends ApiQueryBase {
 			);
 
 			if ( $userCanView ) {
+				$comment = $this->commentStore->getComment( $row )->text;
 				if ( $this->fld_comment ) {
-					$vals['comment'] = $row->rev_comment;
+					$vals['comment'] = $comment;
 				}
 
 				if ( $this->fld_parsedcomment ) {
-					$vals['parsedcomment'] = Linker::formatComment( $row->rev_comment, $title );
+					$vals['parsedcomment'] = Linker::formatComment( $comment, $title );
 				}
 			}
 		}
@@ -489,6 +522,10 @@ class ApiQueryContributions extends ApiQueryBase {
 				ApiBase::PARAM_TYPE => 'user',
 				ApiBase::PARAM_ISMULTI => true
 			],
+			'userids' => [
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_ISMULTI => true
+			],
 			'userprefix' => null,
 			'dir' => [
 				ApiBase::PARAM_DFLT => 'older',
@@ -554,6 +591,6 @@ class ApiQueryContributions extends ApiQueryBase {
 	}
 
 	public function getHelpUrls() {
-		return 'https://www.mediawiki.org/wiki/API:Usercontribs';
+		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Usercontribs';
 	}
 }

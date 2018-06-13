@@ -109,7 +109,7 @@ class ForeignAPIRepo extends FileRepo {
 	 *
 	 * @param Title $title
 	 * @param string|bool $time
-	 * @return File
+	 * @return File|false
 	 */
 	function newFile( $title, $time = false ) {
 		if ( $time ) {
@@ -257,7 +257,7 @@ class ForeignAPIRepo extends FileRepo {
 	 * @param string $name
 	 * @param int $width
 	 * @param int $height
-	 * @param array $result Out parameter that will be changed by the function.
+	 * @param array &$result
 	 * @param string $otherParams
 	 *
 	 * @return bool
@@ -511,7 +511,7 @@ class ForeignAPIRepo extends FileRepo {
 	 * @param string $url
 	 * @param string $timeout
 	 * @param array $options
-	 * @param integer|bool &$mtime Resulting Last-Modified UNIX timestamp if received
+	 * @param int|bool &$mtime Resulting Last-Modified UNIX timestamp if received
 	 * @return bool|string
 	 */
 	public static function httpGet(
@@ -528,7 +528,7 @@ class ForeignAPIRepo extends FileRepo {
 		}
 
 		$req = MWHttpRequest::factory( $url, $options, __METHOD__ );
-		$req->setUserAgent( ForeignAPIRepo::getUserAgent() );
+		$req->setUserAgent( self::getUserAgent() );
 		$status = $req->execute();
 
 		if ( $status->isOK() ) {
@@ -571,7 +571,7 @@ class ForeignAPIRepo extends FileRepo {
 
 		$cache = ObjectCache::getMainWANInstance();
 		return $cache->getWithSetCallback(
-			$this->getLocalCacheKey( get_class( $this ), $target, md5( $url ) ),
+			$this->getLocalCacheKey( static::class, $target, md5( $url ) ),
 			$cacheTTL,
 			function ( $curValue, &$ttl ) use ( $url, $cache ) {
 				$html = self::httpGet( $url, 'default', [], $mtime );
@@ -593,13 +593,13 @@ class ForeignAPIRepo extends FileRepo {
 	 * @throws MWException
 	 */
 	function enumFiles( $callback ) {
-		throw new MWException( 'enumFiles is not supported by ' . get_class( $this ) );
+		throw new MWException( 'enumFiles is not supported by ' . static::class );
 	}
 
 	/**
 	 * @throws MWException
 	 */
 	protected function assertWritableRepo() {
-		throw new MWException( get_class( $this ) . ': write operations are not supported.' );
+		throw new MWException( static::class . ': write operations are not supported.' );
 	}
 }

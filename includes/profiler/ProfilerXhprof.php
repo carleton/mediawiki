@@ -43,12 +43,16 @@
  * ($wgProfiler['exclude']) containing an array of function names.
  * Shell-style patterns are also accepted.
  *
- * @author Bryan Davis <bd808@wikimedia.org>
- * @copyright © 2014 Bryan Davis and Wikimedia Foundation.
+ * It is also possible to use the Tideways PHP extension, which is mostly
+ * a drop-in replacement for Xhprof. Just change the XHPROF_FLAGS_* constants
+ * to TIDEWAYS_FLAGS_*.
+ *
+ * @copyright © 2014 Wikimedia Foundation and contributors
  * @ingroup Profiler
  * @see Xhprof
  * @see https://php.net/xhprof
  * @see https://github.com/facebook/hhvm/blob/master/hphp/doc/profiling.md
+ * @see https://github.com/tideways/php-profiler-extension
  */
 class ProfilerXhprof extends Profiler {
 	/**
@@ -196,7 +200,7 @@ class ProfilerXhprof extends Profiler {
 	 */
 	protected function getFunctionReport() {
 		$data = $this->getFunctionStats();
-		usort( $data, function( $a, $b ) {
+		usort( $data, function ( $a, $b ) {
 			if ( $a['real'] === $b['real'] ) {
 				return 0;
 			}

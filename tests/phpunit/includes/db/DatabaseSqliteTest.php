@@ -1,5 +1,9 @@
 <?php
 
+use Wikimedia\Rdbms\Blob;
+use Wikimedia\Rdbms\Database;
+use Wikimedia\Rdbms\DatabaseSqlite;
+
 class DatabaseSqliteMock extends DatabaseSqlite {
 	private $lastQuery;
 
@@ -82,6 +86,10 @@ class DatabaseSqliteTest extends MediaWikiTestCase {
 			[ // #4: blob object (must be represented as hex)
 				new Blob( "hello" ),
 				"x'68656c6c6f'",
+			],
+			[ // #5: null
+				null,
+				"''",
 			],
 		];
 	}

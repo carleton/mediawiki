@@ -68,7 +68,8 @@ class ParserTestsMaintenance extends Maintenance {
 			'are: removeTbody to remove <tbody> tags; and trimWhitespace ' .
 			'to trim whitespace from the start and end of text nodes.',
 			false, true );
-		$this->addOption( 'use-tidy-config', 'Use the wiki\'s Tidy configuration instead of known-good' .
+		$this->addOption( 'use-tidy-config',
+			'Use the wiki\'s Tidy configuration instead of known-good' .
 			'defaults.' );
 	}
 
@@ -79,7 +80,7 @@ class ParserTestsMaintenance extends Maintenance {
 	}
 
 	public function execute() {
-		global $wgParserTestFiles, $wgDBtype;
+		global $wgDBtype;
 
 		// Cases of weird db corruption were encountered when running tests on earlyish
 		// versions of SQLite
@@ -166,7 +167,7 @@ class ParserTestsMaintenance extends Maintenance {
 		}
 
 		// Default parser tests and any set from extensions or local config
-		$files = $this->getOption( 'file', $wgParserTestFiles );
+		$files = $this->getOption( 'file', ParserTestRunner::getParserTestFiles() );
 
 		$norm = $this->hasOption( 'norm' ) ? explode( ',', $this->getOption( 'norm' ) ) : [];
 

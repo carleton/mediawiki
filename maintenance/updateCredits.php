@@ -26,8 +26,6 @@ if ( PHP_SAPI != 'cli' ) {
 	die( "This script can only be run from the command line.\n" );
 }
 
-chdir( dirname( __DIR__ ) );
-
 $CREDITS = 'CREDITS';
 $START_CONTRIBUTORS = '<!-- BEGIN CONTRIBUTOR LIST -->';
 $END_CONTRIBUTORS = '<!-- END CONTRIBUTOR LIST -->';
@@ -37,6 +35,10 @@ $inFooter = false;
 $header = [];
 $contributors = [];
 $footer = [];
+
+if ( !file_exists( $CREDITS ) ) {
+	exit( 'No CREDITS file found. Are you running this script in the right directory?' );
+}
 
 $lines = explode( "\n", file_get_contents( $CREDITS ) );
 foreach ( $lines as $line ) {
@@ -57,7 +59,7 @@ unset( $lines );
 
 $lines = explode( "\n", shell_exec( 'git log --format="%aN"' ) );
 foreach ( $lines as $line ) {
-	if ( empty( $line ) )  {
+	if ( empty( $line ) ) {
 		continue;
 	}
 	if ( substr( $line, 0, 5 ) === '[BOT]' ) {
@@ -67,7 +69,8 @@ foreach ( $lines as $line ) {
 }
 
 $contributors = array_keys( $contributors );
-$collator = Collator::create( 'uca-default-u-kn' );
+$collator = Collator::create( 'root' );
+$collator->setAttribute( Collator::NUMERIC_COLLATION, Collator::ON );
 $collator->sort( $contributors );
 array_walk( $contributors, function ( &$v, $k ) {
 	$v = "* {$v}";

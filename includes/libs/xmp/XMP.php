@@ -49,7 +49,6 @@ use Wikimedia\ScopedCallback;
  * Note XMP kind of looks like rdf. They are not the same thing - XMP is
  * encoded as a specific subset of rdf. This class can read XMP. It cannot
  * read rdf.
- *
  */
 class XMPReader implements LoggerAwareInterface {
 	/** @var array XMP item configuration array */
@@ -131,12 +130,10 @@ class XMPReader implements LoggerAwareInterface {
 	private $logger;
 
 	/**
-	 * Constructor.
-	 *
 	 * Primary job is to initialize the XMLParser
+	 * @param LoggerInterface|null $logger
 	 */
 	function __construct( LoggerInterface $logger = null ) {
-
 		if ( !function_exists( 'xml_parser_create_ns' ) ) {
 			// this should already be checked by this point
 			throw new RuntimeException( 'XMP support requires XML Parser' );
@@ -175,7 +172,6 @@ class XMPReader implements LoggerAwareInterface {
 	 * For example in jpeg's with extendedXMP
 	 */
 	private function resetXMLParser() {
-
 		$this->destroyXMLParser();
 
 		$this->xmlParser = xml_parser_create_ns( 'UTF-8', ' ' );
@@ -194,6 +190,7 @@ class XMPReader implements LoggerAwareInterface {
 
 	/**
 	 * Check if this instance supports using this class
+	 * @return bool
 	 */
 	public static function isSupported() {
 		return function_exists( 'xml_parser_create_ns' ) && class_exists( 'XMLReader' );
@@ -273,7 +270,6 @@ class XMPReader implements LoggerAwareInterface {
 		if ( isset( $data['xmp-exif']['GPSAltitudeRef'] )
 			&& isset( $data['xmp-exif']['GPSAltitude'] )
 		) {
-
 			// Must convert to a real before multiplying by -1
 			// XMPValidate guarantees there will always be a '/' in this value.
 			list( $nom, $denom ) = explode( '/', $data['xmp-exif']['GPSAltitude'] );
@@ -492,12 +488,11 @@ class XMPReader implements LoggerAwareInterface {
 	 * <exif:DigitalZoomRatio>0/10</exif:DigitalZoomRatio>
 	 * and are processing the 0/10 bit.
 	 *
-	 * @param XMLParser $parser XMLParser reference to the xml parser
+	 * @param resource $parser XMLParser reference to the xml parser
 	 * @param string $data Character data
 	 * @throws RuntimeException On invalid data
 	 */
 	function char( $parser, $data ) {
-
 		$data = trim( $data );
 		if ( trim( $data ) === "" ) {
 			return;
@@ -646,9 +641,8 @@ class XMPReader implements LoggerAwareInterface {
 	 * @throws RuntimeException
 	 */
 	private function endElementNested( $elm ) {
-
 		/* cur item must be the same as $elm, unless if in MODE_STRUCT
-		   in which case it could also be rdf:Description */
+		 * in which case it could also be rdf:Description */
 		if ( $this->curItem[0] !== $elm
 			&& !( $elm === self::NS_RDF . ' Description'
 				&& $this->mode[0] === self::MODE_STRUCT )
@@ -756,7 +750,6 @@ class XMPReader implements LoggerAwareInterface {
 	 * @param string $elm Namespace and element
 	 */
 	private function endElementModeQDesc( $elm ) {
-
 		if ( $elm === self::NS_RDF . ' value' ) {
 			list( $ns, $tag ) = explode( ' ', $this->curItem[0], 2 );
 			$this->saveValue( $ns, $tag, $this->charContent );
@@ -777,7 +770,7 @@ class XMPReader implements LoggerAwareInterface {
 	 * Ignores the outer wrapping elements that are optional in
 	 * xmp and have no meaning.
 	 *
-	 * @param XMLParser $parser
+	 * @param resource $parser
 	 * @param string $elm Namespace . ' ' . element name
 	 * @throws RuntimeException
 	 */
@@ -896,7 +889,7 @@ class XMPReader implements LoggerAwareInterface {
 		if ( $elm === self::NS_RDF . ' Seq' ) {
 			array_unshift( $this->mode, self::MODE_LI );
 		} elseif ( $elm === self::NS_RDF . ' Bag' ) {
-			# bug 27105
+			# T29105
 			$this->logger->info( __METHOD__ . ' Expected an rdf:Seq, but got an rdf:Bag. Pretending'
 				. ' it is a Seq, since some buggy software is known to screw this up.' );
 			array_unshift( $this->mode, self::MODE_LI );
@@ -980,7 +973,6 @@ class XMPReader implements LoggerAwareInterface {
 	 * Called when processing the <rdf:value> or <foo:someQualifier>.
 	 *
 	 * @param string $elm Namespace and tag name separated by a space.
-	 *
 	 */
 	private function startElementModeQDesc( $elm ) {
 		if ( $elm === self::NS_RDF . ' value' ) {
@@ -1006,7 +998,6 @@ class XMPReader implements LoggerAwareInterface {
 	 */
 	private function startElementModeInitial( $ns, $tag, $attribs ) {
 		if ( $ns !== self::NS_RDF ) {
-
 			if ( isset( $this->items[$ns][$tag] ) ) {
 				if ( isset( $this->items[$ns][$tag]['structPart'] ) ) {
 					// If this element is supposed to appear only as
@@ -1068,7 +1059,6 @@ class XMPReader implements LoggerAwareInterface {
 	 */
 	private function startElementModeStruct( $ns, $tag, $attribs ) {
 		if ( $ns !== self::NS_RDF ) {
-
 			if ( isset( $this->items[$ns][$tag] ) ) {
 				if ( isset( $this->items[$ns][$this->ancestorStruct]['children'] )
 					&& !isset( $this->items[$ns][$this->ancestorStruct]['children'][$tag] )
@@ -1088,7 +1078,7 @@ class XMPReader implements LoggerAwareInterface {
 				}
 			} else {
 				array_unshift( $this->mode, self::MODE_IGNORE );
-				array_unshift( $this->curItem, $elm );
+				array_unshift( $this->curItem, $ns . ' ' . $tag );
 
 				return;
 			}
@@ -1190,13 +1180,12 @@ class XMPReader implements LoggerAwareInterface {
 	 * Generally just calls a helper based on what MODE we're in.
 	 * Also does some initial set up for the wrapper element
 	 *
-	 * @param XMLParser $parser
+	 * @param resource $parser
 	 * @param string $elm Namespace "<space>" element
 	 * @param array $attribs Attribute name => value
 	 * @throws RuntimeException
 	 */
 	function startElement( $parser, $elm, $attribs ) {
-
 		if ( $elm === self::NS_RDF . ' RDF'
 			|| $elm === 'adobe:ns:meta/ xmpmeta'
 			|| $elm === 'adobe:ns:meta/ xapmeta'
@@ -1337,7 +1326,6 @@ class XMPReader implements LoggerAwareInterface {
 	 * @param string $val Value to save
 	 */
 	private function saveValue( $ns, $tag, $val ) {
-
 		$info =& $this->items[$ns][$tag];
 		$finalName = isset( $info['map_name'] )
 			? $info['map_name'] : $tag;

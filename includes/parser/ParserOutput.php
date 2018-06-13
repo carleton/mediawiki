@@ -193,6 +193,9 @@ class ParserOutput extends CacheTime {
 	 */
 	private $mLimitReportData = [];
 
+	/** @var array Parser limit report data for JSON */
+	private $mLimitReportJSData = [];
+
 	/**
 	 * @var array $mParseStartTime Timestamps for getTimeSinceStart().
 	 */
@@ -208,19 +211,19 @@ class ParserOutput extends CacheTime {
 	 */
 	private $mFlags = [];
 
-	/** @var integer|null Assumed rev ID for {{REVISIONID}} if no revision is set */
+	/** @var int|null Assumed rev ID for {{REVISIONID}} if no revision is set */
 	private $mSpeculativeRevId;
 
-	/** @var integer Upper bound of expiry based on parse duration */
+	/** @var int Upper bound of expiry based on parse duration */
 	private $mMaxAdaptiveExpiry = INF;
 
 	const EDITSECTION_REGEX =
-		'#<(?:mw:)?editsection page="(.*?)" section="(.*?)"(?:/>|>(.*?)(</(?:mw:)?editsection>))#';
+		'#<(?:mw:)?editsection page="(.*?)" section="(.*?)"(?:/>|>(.*?)(</(?:mw:)?editsection>))#s';
 
 	// finalizeAdaptiveCacheExpiry() uses TTL = MAX( m * PARSE_TIME + b, MIN_AR_TTL)
 	// Current values imply that m=3933.333333 and b=-333.333333
 	// See https://www.nngroup.com/articles/website-response-times/
-	const PARSE_FAST_SEC = .100; // perceived "fast" page parse
+	const PARSE_FAST_SEC = 0.100; // perceived "fast" page parse
 	const PARSE_SLOW_SEC = 1.0; // perceived "slow" page parse
 	const FAST_AR_TTL = 60; // adaptive TTL for "fast" pages
 	const SLOW_AR_TTL = 3600; // adaptive TTL for "slow" pages
@@ -240,6 +243,7 @@ class ParserOutput extends CacheTime {
 	 * return value is suitable for writing back via setText() but is not valid
 	 * for display to the user.
 	 *
+	 * @return string
 	 * @since 1.27
 	 */
 	public function getRawText() {
@@ -250,12 +254,12 @@ class ParserOutput extends CacheTime {
 		$text = $this->mText;
 		if ( $this->mEditSectionTokens ) {
 			$text = preg_replace_callback(
-				ParserOutput::EDITSECTION_REGEX,
+				self::EDITSECTION_REGEX,
 				function ( $m ) {
 					global $wgOut, $wgLang;
 					$editsectionPage = Title::newFromText( htmlspecialchars_decode( $m[1] ) );
 					$editsectionSection = htmlspecialchars_decode( $m[2] );
-					$editsectionContent = isset( $m[4] ) ? $m[3] : null;
+					$editsectionContent = isset( $m[4] ) ? Sanitizer::decodeCharReferences( $m[3] ) : null;
 
 					if ( !is_object( $editsectionPage ) ) {
 						throw new MWException( "Bad parser output text." );
@@ -271,7 +275,7 @@ class ParserOutput extends CacheTime {
 				$text
 			);
 		} else {
-			$text = preg_replace( ParserOutput::EDITSECTION_REGEX, '', $text );
+			$text = preg_replace( self::EDITSECTION_REGEX, '', $text );
 		}
 
 		// If you have an old cached version of this class - sorry, you can't disable the TOC
@@ -288,14 +292,17 @@ class ParserOutput extends CacheTime {
 	}
 
 	/**
-	 * @param integer $id
+	 * @param int $id
 	 * @since 1.28
 	 */
 	public function setSpeculativeRevIdUsed( $id ) {
 		$this->mSpeculativeRevId = $id;
 	}
 
-	/** @since 1.28 */
+	/**
+	 * @return int|null
+	 * @since 1.28
+	 */
 	public function getSpeculativeRevIdUsed() {
 		return $this->mSpeculativeRevId;
 	}
@@ -317,6 +324,7 @@ class ParserOutput extends CacheTime {
 	}
 
 	/**
+	 * @return array
 	 * @since 1.25
 	 */
 	public function getIndicators() {
@@ -379,7 +387,10 @@ class ParserOutput extends CacheTime {
 		return $this->mModuleStyles;
 	}
 
-	/** @since 1.23 */
+	/**
+	 * @return array
+	 * @since 1.23
+	 */
 	public function getJsConfigVars() {
 		return $this->mJsConfigVars;
 	}
@@ -409,6 +420,10 @@ class ParserOutput extends CacheTime {
 
 	public function getLimitReportData() {
 		return $this->mLimitReportData;
+	}
+
+	public function getLimitReportJSData() {
+		return $this->mLimitReportJSData;
 	}
 
 	public function getTOCEnabled() {
@@ -464,6 +479,8 @@ class ParserOutput extends CacheTime {
 	}
 
 	/**
+	 * @param string $id
+	 * @param string $content
 	 * @since 1.25
 	 */
 	public function setIndicator( $id, $content ) {
@@ -693,18 +710,20 @@ class ParserOutput extends CacheTime {
 	 * to SpecialTrackingCategories::$coreTrackingCategories, and extensions
 	 * should add to "TrackingCategories" in their extension.json.
 	 *
+	 * @todo Migrate some code to TrackingCategories
+	 *
 	 * @param string $msg Message key
 	 * @param Title $title title of the page which is being tracked
 	 * @return bool Whether the addition was successful
 	 * @since 1.25
 	 */
 	public function addTrackingCategory( $msg, $title ) {
-		if ( $title->getNamespace() === NS_SPECIAL ) {
+		if ( $title->isSpecialPage() ) {
 			wfDebug( __METHOD__ . ": Not adding tracking category $msg to special page!\n" );
 			return false;
 		}
 
-		// Important to parse with correct title (bug 31469)
+		// Important to parse with correct title (T33469)
 		$cat = wfMessage( $msg )
 			->title( $title )
 			->inContentLanguage()
@@ -827,7 +846,8 @@ class ParserOutput extends CacheTime {
 	 * @code
 	 *    $parser->getOutput()->my_ext_foo = '...';
 	 * @endcode
-	 *
+	 * @param string $name
+	 * @param mixed $value
 	 */
 	public function setProperty( $name, $value ) {
 		$this->mProperties[$name] = $value;
@@ -1015,6 +1035,26 @@ class ParserOutput extends CacheTime {
 	 */
 	public function setLimitReportData( $key, $value ) {
 		$this->mLimitReportData[$key] = $value;
+
+		if ( is_array( $value ) ) {
+			if ( array_keys( $value ) === [ 0, 1 ]
+				&& is_numeric( $value[0] )
+				&& is_numeric( $value[1] )
+			) {
+				$data = [ 'value' => $value[0], 'limit' => $value[1] ];
+			} else {
+				$data = $value;
+			}
+		} else {
+			$data = $value;
+		}
+
+		if ( strpos( $key, '-' ) ) {
+			list( $ns, $name ) = explode( '-', $key, 2 );
+			$this->mLimitReportJSData[$ns][$name] = $data;
+		} else {
+			$this->mLimitReportJSData[$key] = $data;
+		}
 	}
 
 	/**
@@ -1047,7 +1087,7 @@ class ParserOutput extends CacheTime {
 	/**
 	 * Lower the runtime adaptive TTL to at most this value
 	 *
-	 * @param integer $ttl
+	 * @param int $ttl
 	 * @since 1.28
 	 */
 	public function updateRuntimeAdaptiveExpiry( $ttl ) {

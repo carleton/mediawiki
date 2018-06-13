@@ -21,8 +21,8 @@ class SearchInputWidget extends TitleInputWidget {
 	/**
 	 * @param array $config Configuration options
 	 * @param int|null $config['pushPending'] Whether the input should be visually marked as
-	 *  "pending", while requesting suggestions (default: true)
-	 * @param boolean|null $config['performSearchOnClick'] If true, the script will start a search
+	 *  "pending", while requesting suggestions (default: false)
+	 * @param bool|null $config['performSearchOnClick'] If true, the script will start a search
 	 *  whenever a user hits a suggestion. If false, the text of the suggestion is inserted into the
 	 *  text field only (default: true)
 	 * @param string $config['dataLocation'] Where the search input field will be
@@ -31,7 +31,6 @@ class SearchInputWidget extends TitleInputWidget {
 	public function __construct( array $config = [] ) {
 		$config = array_merge( [
 			'maxLength' => null,
-			'type' => 'search',
 			'icon' => 'search',
 		], $config );
 
@@ -54,6 +53,10 @@ class SearchInputWidget extends TitleInputWidget {
 
 		// Initialization
 		$this->addClasses( [ 'mw-widget-searchInputWidget' ] );
+	}
+
+	protected function getInputElement( $config ) {
+		return ( new \OOUI\Tag( 'input' ) )->setAttributes( [ 'type' => 'search' ] );
 	}
 
 	protected function getJavaScriptClassName() {

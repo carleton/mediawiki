@@ -20,6 +20,7 @@
  * @file
  */
 
+use Wikimedia\Rdbms\IDatabase;
 use MediaWiki\MediaWikiServices;
 use Wikimedia\ScopedCallback;
 
@@ -101,8 +102,6 @@ class LinksUpdate extends DataUpdate implements EnqueueableDataUpdate {
 	private $db;
 
 	/**
-	 * Constructor
-	 *
 	 * @param Title $title Title of the page we're updating
 	 * @param ParserOutput $parserOutput Output from a full parse of this page
 	 * @param bool $recursive Queue jobs for recursive updates?
@@ -145,7 +144,7 @@ class LinksUpdate extends DataUpdate implements EnqueueableDataUpdate {
 			# If the sortkey is longer then 255 bytes,
 			# it truncated by DB, and then doesn't get
 			# matched when comparing existing vs current
-			# categories, causing bug 25254.
+			# categories, causing T27254.
 			# Also. substr behaves weird when given "".
 			if ( $sortkey !== '' ) {
 				$sortkey = substr( $sortkey, 0, 255 );
@@ -193,7 +192,7 @@ class LinksUpdate extends DataUpdate implements EnqueueableDataUpdate {
 	 * Acquire a lock for performing link table updates for a page on a DB
 	 *
 	 * @param IDatabase $dbw
-	 * @param integer $pageId
+	 * @param int $pageId
 	 * @param string $why One of (job, atomicity)
 	 * @return ScopedCallback
 	 * @throws RuntimeException
@@ -211,63 +210,84 @@ class LinksUpdate extends DataUpdate implements EnqueueableDataUpdate {
 
 	protected function doIncrementalUpdate() {
 		# Page links
-		$existing = $this->getExistingLinks();
-		$this->linkDeletions = $this->getLinkDeletions( $existing );
-		$this->linkInsertions = $this->getLinkInsertions( $existing );
+		$existingPL = $this->getExistingLinks();
+		$this->linkDeletions = $this->getLinkDeletions( $existingPL );
+		$this->linkInsertions = $this->getLinkInsertions( $existingPL );
 		$this->incrTableUpdate( 'pagelinks', 'pl', $this->linkDeletions, $this->linkInsertions );
 
 		# Image links
-		$existing = $this->getExistingImages();
-		$imageDeletes = $this->getImageDeletions( $existing );
-		$this->incrTableUpdate( 'imagelinks', 'il', $imageDeletes,
-			$this->getImageInsertions( $existing ) );
+		$existingIL = $this->getExistingImages();
+		$imageDeletes = $this->getImageDeletions( $existingIL );
+		$this->incrTableUpdate(
+			'imagelinks',
+			'il',
+			$imageDeletes,
+			$this->getImageInsertions( $existingIL ) );
 
 		# Invalidate all image description pages which had links added or removed
-		$imageUpdates = $imageDeletes + array_diff_key( $this->mImages, $existing );
+		$imageUpdates = $imageDeletes + array_diff_key( $this->mImages, $existingIL );
 		$this->invalidateImageDescriptions( $imageUpdates );
 
 		# External links
-		$existing = $this->getExistingExternals();
-		$this->incrTableUpdate( 'externallinks', 'el', $this->getExternalDeletions( $existing ),
-			$this->getExternalInsertions( $existing ) );
+		$existingEL = $this->getExistingExternals();
+		$this->incrTableUpdate(
+			'externallinks',
+			'el',
+			$this->getExternalDeletions( $existingEL ),
+			$this->getExternalInsertions( $existingEL ) );
 
 		# Language links
-		$existing = $this->getExistingInterlangs();
-		$this->incrTableUpdate( 'langlinks', 'll', $this->getInterlangDeletions( $existing ),
-			$this->getInterlangInsertions( $existing ) );
+		$existingLL = $this->getExistingInterlangs();
+		$this->incrTableUpdate(
+			'langlinks',
+			'll',
+			$this->getInterlangDeletions( $existingLL ),
+			$this->getInterlangInsertions( $existingLL ) );
 
 		# Inline interwiki links
-		$existing = $this->getExistingInterwikis();
-		$this->incrTableUpdate( 'iwlinks', 'iwl', $this->getInterwikiDeletions( $existing ),
-			$this->getInterwikiInsertions( $existing ) );
+		$existingIW = $this->getExistingInterwikis();
+		$this->incrTableUpdate(
+			'iwlinks',
+			'iwl',
+			$this->getInterwikiDeletions( $existingIW ),
+			$this->getInterwikiInsertions( $existingIW ) );
 
 		# Template links
-		$existing = $this->getExistingTemplates();
-		$this->incrTableUpdate( 'templatelinks', 'tl', $this->getTemplateDeletions( $existing ),
-			$this->getTemplateInsertions( $existing ) );
+		$existingTL = $this->getExistingTemplates();
+		$this->incrTableUpdate(
+			'templatelinks',
+			'tl',
+			$this->getTemplateDeletions( $existingTL ),
+			$this->getTemplateInsertions( $existingTL ) );
 
 		# Category links
-		$existing = $this->getExistingCategories();
-		$categoryDeletes = $this->getCategoryDeletions( $existing );
-		$this->incrTableUpdate( 'categorylinks', 'cl', $categoryDeletes,
-			$this->getCategoryInsertions( $existing ) );
-
-		# Invalidate all categories which were added, deleted or changed (set symmetric difference)
-		$categoryInserts = array_diff_assoc( $this->mCategories, $existing );
+		$existingCL = $this->getExistingCategories();
+		$categoryDeletes = $this->getCategoryDeletions( $existingCL );
+		$this->incrTableUpdate(
+			'categorylinks',
+			'cl',
+			$categoryDeletes,
+			$this->getCategoryInsertions( $existingCL ) );
+		$categoryInserts = array_diff_assoc( $this->mCategories, $existingCL );
 		$categoryUpdates = $categoryInserts + $categoryDeletes;
-		$this->invalidateCategories( $categoryUpdates );
-		$this->updateCategoryCounts( $categoryInserts, $categoryDeletes );
 
 		# Page properties
-		$existing = $this->getExistingProperties();
-		$this->propertyDeletions = $this->getPropertyDeletions( $existing );
-		$this->incrTableUpdate( 'page_props', 'pp', $this->propertyDeletions,
-			$this->getPropertyInsertions( $existing ) );
+		$existingPP = $this->getExistingProperties();
+		$this->propertyDeletions = $this->getPropertyDeletions( $existingPP );
+		$this->incrTableUpdate(
+			'page_props',
+			'pp',
+			$this->propertyDeletions,
+			$this->getPropertyInsertions( $existingPP ) );
 
 		# Invalidate the necessary pages
-		$this->propertyInsertions = array_diff_assoc( $this->mProperties, $existing );
+		$this->propertyInsertions = array_diff_assoc( $this->mProperties, $existingPP );
 		$changed = $this->propertyDeletions + $this->propertyInsertions;
 		$this->invalidateProperties( $changed );
+
+		# Invalidate all categories which were added, deleted or changed (set symmetric difference)
+		$this->invalidateCategories( $categoryUpdates );
+		$this->updateCategoryCounts( $categoryInserts, $categoryDeletes );
 
 		# Refresh links of all pages including this page
 		# This will be in a separate transaction
@@ -330,7 +350,7 @@ class LinksUpdate extends DataUpdate implements EnqueueableDataUpdate {
 	/**
 	 * @param array $cats
 	 */
-	function invalidateCategories( $cats ) {
+	private function invalidateCategories( $cats ) {
 		PurgeJobUtils::invalidatePages( $this->getDB(), NS_CATEGORY, array_keys( $cats ) );
 	}
 
@@ -339,17 +359,36 @@ class LinksUpdate extends DataUpdate implements EnqueueableDataUpdate {
 	 * @param array $added Associative array of category name => sort key
 	 * @param array $deleted Associative array of category name => sort key
 	 */
-	function updateCategoryCounts( $added, $deleted ) {
-		$a = WikiPage::factory( $this->mTitle );
-		$a->updateCategoryCounts(
-			array_keys( $added ), array_keys( $deleted )
-		);
+	private function updateCategoryCounts( array $added, array $deleted ) {
+		global $wgUpdateRowsPerQuery;
+
+		if ( !$added && !$deleted ) {
+			return;
+		}
+
+		$domainId = $this->getDB()->getDomainID();
+		$wp = WikiPage::factory( $this->mTitle );
+		$lbf = MediaWikiServices::getInstance()->getDBLoadBalancerFactory();
+		// T163801: try to release any row locks to reduce contention
+		$lbf->commitAndWaitForReplication( __METHOD__, $this->ticket, [ 'domain' => $domainId ] );
+
+		foreach ( array_chunk( array_keys( $added ), $wgUpdateRowsPerQuery ) as $addBatch ) {
+			$wp->updateCategoryCounts( $addBatch, [], $this->mId );
+			$lbf->commitAndWaitForReplication(
+				__METHOD__, $this->ticket, [ 'domain' => $domainId ] );
+		}
+
+		foreach ( array_chunk( array_keys( $deleted ), $wgUpdateRowsPerQuery ) as $deleteBatch ) {
+			$wp->updateCategoryCounts( [], $deleteBatch, $this->mId );
+			$lbf->commitAndWaitForReplication(
+				__METHOD__, $this->ticket, [ 'domain' => $domainId ] );
+		}
 	}
 
 	/**
 	 * @param array $images
 	 */
-	function invalidateImageDescriptions( $images ) {
+	private function invalidateImageDescriptions( $images ) {
 		PurgeJobUtils::invalidatePages( $this->getDB(), NS_FILE, array_keys( $images ) );
 	}
 
@@ -363,7 +402,7 @@ class LinksUpdate extends DataUpdate implements EnqueueableDataUpdate {
 	private function incrTableUpdate( $table, $prefix, $deletions, $insertions ) {
 		$services = MediaWikiServices::getInstance();
 		$bSize = $services->getMainConfig()->get( 'UpdateRowsPerQuery' );
-		$factory = $services->getDBLoadBalancerFactory();
+		$lbf = $services->getDBLoadBalancerFactory();
 
 		if ( $table === 'page_props' ) {
 			$fromField = 'pp_page';
@@ -373,7 +412,7 @@ class LinksUpdate extends DataUpdate implements EnqueueableDataUpdate {
 
 		$deleteWheres = []; // list of WHERE clause arrays for each DB delete() call
 		if ( $table === 'pagelinks' || $table === 'templatelinks' || $table === 'iwlinks' ) {
-			$baseKey =  ( $table === 'iwlinks' ) ? 'iwl_prefix' : "{$prefix}_namespace";
+			$baseKey = ( $table === 'iwlinks' ) ? 'iwl_prefix' : "{$prefix}_namespace";
 
 			$curBatchSize = 0;
 			$curDeletionBatch = [];
@@ -413,18 +452,20 @@ class LinksUpdate extends DataUpdate implements EnqueueableDataUpdate {
 			}
 		}
 
+		$domainId = $this->getDB()->getDomainID();
+
 		foreach ( $deleteWheres as $deleteWhere ) {
 			$this->getDB()->delete( $table, $deleteWhere, __METHOD__ );
-			$factory->commitAndWaitForReplication(
-				__METHOD__, $this->ticket, [ 'wiki' => $this->getDB()->getWikiID() ]
+			$lbf->commitAndWaitForReplication(
+				__METHOD__, $this->ticket, [ 'domain' => $domainId ]
 			);
 		}
 
 		$insertBatches = array_chunk( $insertions, $bSize );
 		foreach ( $insertBatches as $insertBatch ) {
 			$this->getDB()->insert( $table, $insertBatch, __METHOD__, 'IGNORE' );
-			$factory->commitAndWaitForReplication(
-				__METHOD__, $this->ticket, [ 'wiki' => $this->getDB()->getWikiID() ]
+			$lbf->commitAndWaitForReplication(
+				__METHOD__, $this->ticket, [ 'domain' => $domainId ]
 			);
 		}
 
@@ -511,7 +552,6 @@ class LinksUpdate extends DataUpdate implements EnqueueableDataUpdate {
 		foreach ( $diffs as $url => $dummy ) {
 			foreach ( wfMakeUrlIndexes( $url ) as $index ) {
 				$arr[] = [
-					'el_id' => $this->getDB()->nextSequenceValue( 'externallinks_el_id_seq' ),
 					'el_from' => $this->mId,
 					'el_to' => $url,
 					'el_index' => $index,
@@ -1107,7 +1147,7 @@ class LinksUpdate extends DataUpdate implements EnqueueableDataUpdate {
 		}
 
 		return [
-			'wiki' => $this->getDB()->getWikiID(),
+			'wiki' => WikiMap::getWikiIdFromDomain( $this->getDB()->getDomainID() ),
 			'job'  => new JobSpecification(
 				'refreshLinksPrioritized',
 				[

@@ -1,5 +1,7 @@
 <?php
 
+use MediaWiki\MediaWikiServices;
+
 class ConfigFactoryTest extends MediaWikiTestCase {
 
 	/**
@@ -45,7 +47,7 @@ class ConfigFactoryTest extends MediaWikiTestCase {
 	}
 
 	/**
-	 * @covers ConfigFactory::register
+	 * @covers ConfigFactory::salvage
 	 */
 	public function testSalvage() {
 		$oldFactory = new ConfigFactory();
@@ -61,7 +63,7 @@ class ConfigFactoryTest extends MediaWikiTestCase {
 		// define new config instance
 		$newFactory = new ConfigFactory();
 		$newFactory->register( 'foo', 'GlobalVarConfig::newInstance' );
-		$newFactory->register( 'bar', function() {
+		$newFactory->register( 'bar', function () {
 			return new HashConfig();
 		} );
 
@@ -81,7 +83,7 @@ class ConfigFactoryTest extends MediaWikiTestCase {
 	}
 
 	/**
-	 * @covers ConfigFactory::register
+	 * @covers ConfigFactory::getConfigNames
 	 */
 	public function testGetConfigNames() {
 		$factory = new ConfigFactory();
@@ -94,13 +96,23 @@ class ConfigFactoryTest extends MediaWikiTestCase {
 	/**
 	 * @covers ConfigFactory::makeConfig
 	 */
-	public function testMakeConfig() {
+	public function testMakeConfigWithCallback() {
 		$factory = new ConfigFactory();
 		$factory->register( 'unittest', 'GlobalVarConfig::newInstance' );
 
 		$conf = $factory->makeConfig( 'unittest' );
 		$this->assertInstanceOf( 'Config', $conf );
 		$this->assertSame( $conf, $factory->makeConfig( 'unittest' ) );
+	}
+
+	/**
+	 * @covers ConfigFactory::makeConfig
+	 */
+	public function testMakeConfigWithObject() {
+		$factory = new ConfigFactory();
+		$conf = new HashConfig();
+		$factory->register( 'test', $conf );
+		$this->assertSame( $conf, $factory->makeConfig( 'test' ) );
 	}
 
 	/**
@@ -140,7 +152,7 @@ class ConfigFactoryTest extends MediaWikiTestCase {
 	public function testGetDefaultInstance() {
 		// NOTE: the global config factory returned here has been overwritten
 		// for operation in test mode. It may not reflect LocalSettings.
-		$factory = ConfigFactory::getDefaultInstance();
+		$factory = MediaWikiServices::getInstance()->getConfigFactory();
 		$this->assertInstanceOf( 'Config', $factory->makeConfig( 'main' ) );
 	}
 

@@ -41,26 +41,28 @@ use MediaWiki\Interwiki\ClassicInterwikiLookup;
 use MediaWiki\Linker\LinkRendererFactory;
 use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Shell\CommandFactory;
 
 return [
-	'DBLoadBalancerFactory' => function( MediaWikiServices $services ) {
+	'DBLoadBalancerFactory' => function ( MediaWikiServices $services ) {
 		$mainConfig = $services->getMainConfig();
 
 		$lbConf = MWLBFactory::applyDefaultConfig(
 			$mainConfig->get( 'LBFactoryConf' ),
-			$mainConfig
+			$mainConfig,
+			$services->getConfiguredReadOnlyMode()
 		);
 		$class = MWLBFactory::getLBFactoryClass( $lbConf );
 
 		return new $class( $lbConf );
 	},
 
-	'DBLoadBalancer' => function( MediaWikiServices $services ) {
+	'DBLoadBalancer' => function ( MediaWikiServices $services ) {
 		// just return the default LB from the DBLoadBalancerFactory service
 		return $services->getDBLoadBalancerFactory()->getMainLB();
 	},
 
-	'SiteStore' => function( MediaWikiServices $services ) {
+	'SiteStore' => function ( MediaWikiServices $services ) {
 		$rawSiteStore = new DBSiteStore( $services->getDBLoadBalancer() );
 
 		// TODO: replace wfGetCache with a CacheFactory service.
@@ -70,12 +72,18 @@ return [
 		return new CachingSiteStore( $rawSiteStore, $cache );
 	},
 
-	'SiteLookup' => function( MediaWikiServices $services ) {
-		// Use the default SiteStore as the SiteLookup implementation for now
-		return $services->getSiteStore();
+	'SiteLookup' => function ( MediaWikiServices $services ) {
+		$cacheFile = $services->getMainConfig()->get( 'SitesCacheFile' );
+
+		if ( $cacheFile !== false ) {
+			return new FileBasedSiteLookup( $cacheFile );
+		} else {
+			// Use the default SiteStore as the SiteLookup implementation for now
+			return $services->getSiteStore();
+		}
 	},
 
-	'ConfigFactory' => function( MediaWikiServices $services ) {
+	'ConfigFactory' => function ( MediaWikiServices $services ) {
 		// Use the bootstrap config to initialize the ConfigFactory.
 		$registry = $services->getBootstrapConfig()->get( 'ConfigRegistry' );
 		$factory = new ConfigFactory();
@@ -86,17 +94,17 @@ return [
 		return $factory;
 	},
 
-	'MainConfig' => function( MediaWikiServices $services ) {
+	'MainConfig' => function ( MediaWikiServices $services ) {
 		// Use the 'main' config from the ConfigFactory service.
 		return $services->getConfigFactory()->makeConfig( 'main' );
 	},
 
-	'InterwikiLookup' => function( MediaWikiServices $services ) {
+	'InterwikiLookup' => function ( MediaWikiServices $services ) {
 		global $wgContLang; // TODO: manage $wgContLang as a service
 		$config = $services->getMainConfig();
 		return new ClassicInterwikiLookup(
 			$wgContLang,
-			ObjectCache::getMainWANInstance(),
+			$services->getMainWANObjectCache(),
 			$config->get( 'InterwikiExpiry' ),
 			$config->get( 'InterwikiCache' ),
 			$config->get( 'InterwikiScopes' ),
@@ -104,26 +112,26 @@ return [
 		);
 	},
 
-	'StatsdDataFactory' => function( MediaWikiServices $services ) {
+	'StatsdDataFactory' => function ( MediaWikiServices $services ) {
 		return new BufferingStatsdDataFactory(
 			rtrim( $services->getMainConfig()->get( 'StatsdMetricPrefix' ), '.' )
 		);
 	},
 
-	'EventRelayerGroup' => function( MediaWikiServices $services ) {
+	'EventRelayerGroup' => function ( MediaWikiServices $services ) {
 		return new EventRelayerGroup( $services->getMainConfig()->get( 'EventRelayerConfig' ) );
 	},
 
-	'SearchEngineFactory' => function( MediaWikiServices $services ) {
+	'SearchEngineFactory' => function ( MediaWikiServices $services ) {
 		return new SearchEngineFactory( $services->getSearchEngineConfig() );
 	},
 
-	'SearchEngineConfig' => function( MediaWikiServices $services ) {
+	'SearchEngineConfig' => function ( MediaWikiServices $services ) {
 		global $wgContLang;
 		return new SearchEngineConfig( $services->getMainConfig(), $wgContLang );
 	},
 
-	'SkinFactory' => function( MediaWikiServices $services ) {
+	'SkinFactory' => function ( MediaWikiServices $services ) {
 		$factory = new SkinFactory();
 
 		$names = $services->getMainConfig()->get( 'ValidSkinNames' );
@@ -146,20 +154,21 @@ return [
 		return $factory;
 	},
 
-	'WatchedItemStore' => function( MediaWikiServices $services ) {
+	'WatchedItemStore' => function ( MediaWikiServices $services ) {
 		$store = new WatchedItemStore(
 			$services->getDBLoadBalancer(),
-			new HashBagOStuff( [ 'maxKeys' => 100 ] )
+			new HashBagOStuff( [ 'maxKeys' => 100 ] ),
+			$services->getReadOnlyMode()
 		);
 		$store->setStatsdDataFactory( $services->getStatsdDataFactory() );
 		return $store;
 	},
 
-	'WatchedItemQueryService' => function( MediaWikiServices $services ) {
+	'WatchedItemQueryService' => function ( MediaWikiServices $services ) {
 		return new WatchedItemQueryService( $services->getDBLoadBalancer() );
 	},
 
-	'CryptRand' => function( MediaWikiServices $services ) {
+	'CryptRand' => function ( MediaWikiServices $services ) {
 		$secretKey = $services->getMainConfig()->get( 'SecretKey' );
 		return new CryptRand(
 			[
@@ -170,7 +179,7 @@ return [
 				// for a little more variance
 				'wfWikiID',
 				// If we have a secret key set then throw it into the state as well
-				function() use ( $secretKey ) {
+				function () use ( $secretKey ) {
 					return $secretKey ?: '';
 				}
 			],
@@ -184,7 +193,7 @@ return [
 		);
 	},
 
-	'CryptHKDF' => function( MediaWikiServices $services ) {
+	'CryptHKDF' => function ( MediaWikiServices $services ) {
 		$config = $services->getMainConfig();
 
 		$secret = $config->get( 'HKDFSecret' ) ?: $config->get( 'SecretKey' );
@@ -207,22 +216,66 @@ return [
 		);
 	},
 
-	'MediaHandlerFactory' => function( MediaWikiServices $services ) {
+	'MediaHandlerFactory' => function ( MediaWikiServices $services ) {
 		return new MediaHandlerFactory(
 			$services->getMainConfig()->get( 'MediaHandlers' )
 		);
 	},
 
-	'MimeAnalyzer' => function( MediaWikiServices $services ) {
-		return new MimeMagic(
-			MimeMagic::applyDefaultParameters(
-				[],
-				$services->getMainConfig()
-			)
-		);
+	'MimeAnalyzer' => function ( MediaWikiServices $services ) {
+		$logger = LoggerFactory::getInstance( 'Mime' );
+		$mainConfig = $services->getMainConfig();
+		$params = [
+			'typeFile' => $mainConfig->get( 'MimeTypeFile' ),
+			'infoFile' => $mainConfig->get( 'MimeInfoFile' ),
+			'xmlTypes' => $mainConfig->get( 'XMLMimeTypes' ),
+			'guessCallback' =>
+				function ( $mimeAnalyzer, &$head, &$tail, $file, &$mime ) use ( $logger ) {
+					// Also test DjVu
+					$deja = new DjVuImage( $file );
+					if ( $deja->isValid() ) {
+						$logger->info( __METHOD__ . ": detected $file as image/vnd.djvu\n" );
+						$mime = 'image/vnd.djvu';
+
+						return;
+					}
+					// Some strings by reference for performance - assuming well-behaved hooks
+					Hooks::run(
+						'MimeMagicGuessFromContent',
+						[ $mimeAnalyzer, &$head, &$tail, $file, &$mime ]
+					);
+				},
+			'extCallback' => function ( $mimeAnalyzer, $ext, &$mime ) {
+				// Media handling extensions can improve the MIME detected
+				Hooks::run( 'MimeMagicImproveFromExtension', [ $mimeAnalyzer, $ext, &$mime ] );
+			},
+			'initCallback' => function ( $mimeAnalyzer ) {
+				// Allow media handling extensions adding MIME-types and MIME-info
+				Hooks::run( 'MimeMagicInit', [ $mimeAnalyzer ] );
+			},
+			'logger' => $logger
+		];
+
+		if ( $params['infoFile'] === 'includes/mime.info' ) {
+			$params['infoFile'] = __DIR__ . "/libs/mime/mime.info";
+		}
+
+		if ( $params['typeFile'] === 'includes/mime.types' ) {
+			$params['typeFile'] = __DIR__ . "/libs/mime/mime.types";
+		}
+
+		$detectorCmd = $mainConfig->get( 'MimeDetectorCommand' );
+		if ( $detectorCmd ) {
+			$params['detectCallback'] = function ( $file ) use ( $detectorCmd ) {
+				return wfShellExec( "$detectorCmd " . wfEscapeShellArg( $file ) );
+			};
+		}
+
+		// XXX: MimeMagic::singleton currently requires this service to return an instance of MimeMagic
+		return new MimeMagic( $params );
 	},
 
-	'ProxyLookup' => function( MediaWikiServices $services ) {
+	'ProxyLookup' => function ( MediaWikiServices $services ) {
 		$mainConfig = $services->getMainConfig();
 		return new ProxyLookup(
 			$mainConfig->get( 'SquidServers' ),
@@ -230,21 +283,37 @@ return [
 		);
 	},
 
-	'LinkCache' => function( MediaWikiServices $services ) {
-		return new LinkCache(
-			$services->getTitleFormatter(),
-			ObjectCache::getMainWANInstance()
+	'Parser' => function ( MediaWikiServices $services ) {
+		$conf = $services->getMainConfig()->get( 'ParserConf' );
+		return ObjectFactory::constructClassInstance( $conf['class'], [ $conf ] );
+	},
+
+	'ParserCache' => function ( MediaWikiServices $services ) {
+		$config = $services->getMainConfig();
+		$cache = ObjectCache::getInstance( $config->get( 'ParserCacheType' ) );
+		wfDebugLog( 'caches', 'parser: ' . get_class( $cache ) );
+
+		return new ParserCache(
+			$cache,
+			$config->get( 'CacheEpoch' )
 		);
 	},
 
-	'LinkRendererFactory' => function( MediaWikiServices $services ) {
+	'LinkCache' => function ( MediaWikiServices $services ) {
+		return new LinkCache(
+			$services->getTitleFormatter(),
+			$services->getMainWANObjectCache()
+		);
+	},
+
+	'LinkRendererFactory' => function ( MediaWikiServices $services ) {
 		return new LinkRendererFactory(
 			$services->getTitleFormatter(),
 			$services->getLinkCache()
 		);
 	},
 
-	'LinkRenderer' => function( MediaWikiServices $services ) {
+	'LinkRenderer' => function ( MediaWikiServices $services ) {
 		global $wgUser;
 
 		if ( defined( 'MW_NO_SESSION' ) ) {
@@ -254,11 +323,11 @@ return [
 		}
 	},
 
-	'GenderCache' => function( MediaWikiServices $services ) {
+	'GenderCache' => function ( MediaWikiServices $services ) {
 		return new GenderCache();
 	},
 
-	'_MediaWikiTitleCodec' => function( MediaWikiServices $services ) {
+	'_MediaWikiTitleCodec' => function ( MediaWikiServices $services ) {
 		global $wgContLang;
 
 		return new MediaWikiTitleCodec(
@@ -268,15 +337,15 @@ return [
 		);
 	},
 
-	'TitleFormatter' => function( MediaWikiServices $services ) {
+	'TitleFormatter' => function ( MediaWikiServices $services ) {
 		return $services->getService( '_MediaWikiTitleCodec' );
 	},
 
-	'TitleParser' => function( MediaWikiServices $services ) {
+	'TitleParser' => function ( MediaWikiServices $services ) {
 		return $services->getService( '_MediaWikiTitleCodec' );
 	},
 
-	'MainObjectStash' => function( MediaWikiServices $services ) {
+	'MainObjectStash' => function ( MediaWikiServices $services ) {
 		$mainConfig = $services->getMainConfig();
 
 		$id = $mainConfig->get( 'MainStash' );
@@ -288,7 +357,7 @@ return [
 		return \ObjectCache::newFromParams( $mainConfig->get( 'ObjectCaches' )[$id] );
 	},
 
-	'MainWANObjectCache' => function( MediaWikiServices $services ) {
+	'MainWANObjectCache' => function ( MediaWikiServices $services ) {
 		$mainConfig = $services->getMainConfig();
 
 		$id = $mainConfig->get( 'MainWANCache' );
@@ -308,7 +377,7 @@ return [
 		return \ObjectCache::newWANCacheFromParams( $params );
 	},
 
-	'LocalServerObjectCache' => function( MediaWikiServices $services ) {
+	'LocalServerObjectCache' => function ( MediaWikiServices $services ) {
 		$mainConfig = $services->getMainConfig();
 
 		if ( function_exists( 'apc_fetch' ) ) {
@@ -331,7 +400,7 @@ return [
 		return \ObjectCache::newFromParams( $mainConfig->get( 'ObjectCaches' )[$id] );
 	},
 
-	'VirtualRESTServiceClient' => function( MediaWikiServices $services ) {
+	'VirtualRESTServiceClient' => function ( MediaWikiServices $services ) {
 		$config = $services->getMainConfig()->get( 'VirtualRestConfig' );
 
 		$vrsClient = new VirtualRESTServiceClient( new MultiHttpClient( [] ) );
@@ -347,6 +416,34 @@ return [
 		}
 
 		return $vrsClient;
+	},
+
+	'ConfiguredReadOnlyMode' => function ( MediaWikiServices $services ) {
+		return new ConfiguredReadOnlyMode( $services->getMainConfig() );
+	},
+
+	'ReadOnlyMode' => function ( MediaWikiServices $services ) {
+		return new ReadOnlyMode(
+			$services->getConfiguredReadOnlyMode(),
+			$services->getDBLoadBalancer()
+		);
+	},
+
+	'ShellCommandFactory' => function ( MediaWikiServices $services ) {
+		$config = $services->getMainConfig();
+
+		$limits = [
+			'time' => $config->get( 'MaxShellTime' ),
+			'walltime' => $config->get( 'MaxShellWallClockTime' ),
+			'memory' => $config->get( 'MaxShellMemory' ),
+			'filesize' => $config->get( 'MaxShellFileSize' ),
+		];
+		$cgroup = $config->get( 'ShellCgroup' );
+
+		$factory = new CommandFactory( $limits, $cgroup );
+		$factory->setLogger( LoggerFactory::getInstance( 'exec' ) );
+
+		return $factory;
 	},
 
 	///////////////////////////////////////////////////////////////////////////

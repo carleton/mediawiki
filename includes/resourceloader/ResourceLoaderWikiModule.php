@@ -22,6 +22,9 @@
  * @author Roan Kattouw
  */
 
+use Wikimedia\Rdbms\Database;
+use Wikimedia\Rdbms\IDatabase;
+
 /**
  * Abstraction for ResourceLoader modules which pull from wiki pages
  *
@@ -36,7 +39,6 @@
  * Safe for calls on local wikis are:
  * - Option getters:
  *   - getGroup()
- *   - getPosition()
  *   - getPages()
  * - Basic methods that strictly involve the foreign database
  *   - getDB()
@@ -44,8 +46,6 @@
  *   - getTitleInfo()
  */
 class ResourceLoaderWikiModule extends ResourceLoaderModule {
-	/** @var string Position on the page to load this module at */
-	protected $position = 'bottom';
 
 	// Origin defaults to users with sitewide authority
 	protected $origin = self::ORIGIN_USER_SITEWIDE;
@@ -72,7 +72,6 @@ class ResourceLoaderWikiModule extends ResourceLoaderModule {
 
 		foreach ( $options as $member => $option ) {
 			switch ( $member ) {
-				case 'position':
 				case 'styles':
 				case 'scripts':
 				case 'group':
@@ -150,7 +149,16 @@ class ResourceLoaderWikiModule extends ResourceLoaderModule {
 	protected function getContent( $titleText ) {
 		$title = Title::newFromText( $titleText );
 		if ( !$title ) {
-			return null;
+			return null; // Bad title
+		}
+
+		// If the page is a redirect, follow the redirect.
+		if ( $title->isRedirect() ) {
+			$content = $this->getContentObj( $title );
+			$title = $content ? $content->getUltimateRedirectTarget() : null;
+			if ( !$title ) {
+				return null; // Dead redirect
+			}
 		}
 
 		$handler = ContentHandler::getForTitle( $title );
@@ -159,27 +167,39 @@ class ResourceLoaderWikiModule extends ResourceLoaderModule {
 		} elseif ( $handler->isSupportedFormat( CONTENT_FORMAT_JAVASCRIPT ) ) {
 			$format = CONTENT_FORMAT_JAVASCRIPT;
 		} else {
-			return null;
+			return null; // Bad content model
 		}
 
-		$revision = Revision::newFromTitle( $title, false, Revision::READ_NORMAL );
-		if ( !$revision ) {
-			return null;
-		}
-
-		$content = $revision->getContent( Revision::RAW );
-
+		$content = $this->getContentObj( $title );
 		if ( !$content ) {
-			wfDebugLog( 'resourceloader', __METHOD__ . ': failed to load content of JS/CSS page!' );
-			return null;
+			return null; // No content found
 		}
 
 		return $content->serialize( $format );
 	}
 
 	/**
+	 * @param Title $title
+	 * @return Content|null
+	 */
+	protected function getContentObj( Title $title ) {
+		$revision = Revision::newKnownCurrent( wfGetDB( DB_REPLICA ), $title->getArticleID(),
+			$title->getLatestRevID() );
+		if ( !$revision ) {
+			return null;
+		}
+		$revision->setTitle( $title );
+		$content = $revision->getContent( Revision::RAW );
+		if ( !$content ) {
+			wfDebugLog( 'resourceloader', __METHOD__ . ': failed to load content of JS/CSS page!' );
+			return null;
+		}
+		return $content;
+	}
+
+	/**
 	 * @param ResourceLoaderContext $context
-	 * @return string
+	 * @return string JavaScript code
 	 */
 	public function getScript( ResourceLoaderContext $context ) {
 		$scripts = '';
@@ -271,7 +291,7 @@ class ResourceLoaderWikiModule extends ResourceLoaderModule {
 			return true;
 		}
 
-		// Bug 68488: For other modules (i.e. ones that are called in cached html output) only check
+		// T70488: For other modules (i.e. ones that are called in cached html output) only check
 		// page existance. This ensures that, if some pages in a module are temporarily blanked,
 		// we don't end omit the module's script or link tag on some pages.
 		return count( $revisions ) === 0;
@@ -353,11 +373,16 @@ class ResourceLoaderWikiModule extends ResourceLoaderModule {
 			if ( $module instanceof self ) {
 				$mDB = $module->getDB();
 				// Subclasses may disable getDB and implement getTitleInfo differently
-				if ( $mDB && $mDB->getWikiID() === $db->getWikiID() ) {
+				if ( $mDB && $mDB->getDomainID() === $db->getDomainID() ) {
 					$wikiModules[] = $module;
 					$allPages += $module->getPages( $context );
 				}
 			}
+		}
+
+		if ( !$wikiModules ) {
+			// Nothing to preload
+			return;
 		}
 
 		$pageNames = array_keys( $allPages );
@@ -370,14 +395,17 @@ class ResourceLoaderWikiModule extends ResourceLoaderModule {
 
 		$cache = ObjectCache::getMainWANInstance();
 		$allInfo = $cache->getWithSetCallback(
-			$cache->makeGlobalKey( 'resourceloader', 'titleinfo', $db->getWikiID(), $hash ),
+			$cache->makeGlobalKey( 'resourceloader', 'titleinfo', $db->getDomainID(), $hash ),
 			$cache::TTL_HOUR,
 			function ( $curVal, &$ttl, array &$setOpts ) use ( $func, $pageNames, $db, $fname ) {
 				$setOpts += Database::getCacheSetOptions( $db );
 
 				return call_user_func( $func, $db, $pageNames, $fname );
 			},
-			[ 'checkKeys' => [ $cache->makeGlobalKey( 'resourceloader', 'titleinfo', $db->getWikiID() ) ] ]
+			[
+				'checkKeys' => [
+					$cache->makeGlobalKey( 'resourceloader', 'titleinfo', $db->getDomainID() ) ]
+			]
 		);
 
 		foreach ( $wikiModules as $wikiModule ) {
@@ -432,13 +460,6 @@ class ResourceLoaderWikiModule extends ResourceLoaderModule {
 			$key = $cache->makeGlobalKey( 'resourceloader', 'titleinfo', $wikiId );
 			$cache->touchCheckKey( $key );
 		}
-	}
-
-	/**
-	 * @return string
-	 */
-	public function getPosition() {
-		return $this->position;
 	}
 
 	/**

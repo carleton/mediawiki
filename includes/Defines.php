@@ -20,11 +20,20 @@
  * @file
  */
 
+require_once __DIR__ . '/libs/mime/defines.php';
+require_once __DIR__ . '/libs/rdbms/defines.php';
+require_once __DIR__ . '/compat/normal/UtfNormalDefines.php';
+
+use Wikimedia\Rdbms\IDatabase;
+
 /**
  * @defgroup Constants MediaWiki constants
  */
 
 # Obsolete aliases
+/**
+ * @deprecated since 1.28
+ */
 define( 'DB_SLAVE', -1 );
 
 /**@{
@@ -97,8 +106,6 @@ define( 'CACHE_MEMCACHED', 2 );  // MemCached, must specify servers in $wgMemCac
 define( 'CACHE_ACCEL', 3 );      // APC, XCache or WinCache
 /**@}*/
 
-require_once __DIR__ . '/libs/mime/defines.php';
-
 /**@{
  * Antivirus result codes, for use in $wgAntivirusSetup.
  */
@@ -152,16 +159,6 @@ define( 'EDIT_DEFER_UPDATES', 32 ); // Unused since 1.27
 define( 'EDIT_AUTOSUMMARY', 64 );
 define( 'EDIT_INTERNAL', 128 );
 /**@}*/
-
-/**
- * Database related
- */
-require_once __DIR__ . '/libs/rdbms/defines.php';
-
-/**
- * Unicode and normalisation related
- */
-require_once __DIR__ . '/compat/normal/UtfNormalDefines.php';
 
 /**@{
  * Hook support constants
@@ -272,4 +269,29 @@ define( 'CONTENT_FORMAT_XML', 'application/xml' );
  * Max string length for shell invocations; based on binfmts.h
  */
 define( 'SHELL_MAX_ARG_STRLEN', '100000' );
+/**@}*/
+
+/**@{
+ * Schema change migration flags.
+ *
+ * Used as values of a feature flag for an orderly transition from an old
+ * schema to a new schema.
+ *
+ * - MIGRATION_OLD: Only read and write the old schema. The new schema need not
+ *   even exist. This is used from when the patch is merged until the schema
+ *   change is actually applied to the database.
+ * - MIGRATION_WRITE_BOTH: Write both the old and new schema. Read the new
+ *   schema preferentially, falling back to the old. This is used while the
+ *   change is being tested, allowing easy roll-back to the old schema.
+ * - MIGRATION_WRITE_NEW: Write only the new schema. Read the new schema
+ *   preferentially, falling back to the old. This is used while running the
+ *   maintenance script to migrate existing entries in the old schema to the
+ *   new schema.
+ * - MIGRATION_NEW: Only read and write the new schema. The old schema (and the
+ *   feature flag) may now be removed.
+ */
+define( 'MIGRATION_OLD', 0 );
+define( 'MIGRATION_WRITE_BOTH', 1 );
+define( 'MIGRATION_WRITE_NEW', 2 );
+define( 'MIGRATION_NEW', 3 );
 /**@}*/

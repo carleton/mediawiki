@@ -19,7 +19,6 @@
  *
  * @file
  * @ingroup FileBackend
- * @author Aaron Schulz
  */
 
 /**
@@ -167,7 +166,7 @@ class FileBackendMultiWrite extends FileBackend {
 		// Do a consistency check to see if the backends are consistent...
 		$syncStatus = $this->consistencyCheck( $relevantPaths );
 		if ( !$syncStatus->isOK() ) {
-			wfDebugLog( 'FileOperation', get_class( $this ) .
+			wfDebugLog( 'FileOperation', static::class .
 				" failed sync check: " . FormatJson::encode( $relevantPaths ) );
 			// Try to resync the clone backends to the master on the spot...
 			if ( $this->autoResync === false
@@ -196,7 +195,7 @@ class FileBackendMultiWrite extends FileBackend {
 				if ( $this->asyncWrites && !$this->hasVolatileSources( $ops ) ) {
 					// Bind $scopeLock to the callback to preserve locks
 					DeferredUpdates::addCallableUpdate(
-						function() use ( $backend, $realOps, $opts, $scopeLock, $relevantPaths ) {
+						function () use ( $backend, $realOps, $opts, $scopeLock, $relevantPaths ) {
 							wfDebugLog( 'FileOperationReplication',
 								"'{$backend->getName()}' async replication; paths: " .
 								FormatJson::encode( $relevantPaths ) );
@@ -378,7 +377,7 @@ class FileBackendMultiWrite extends FileBackend {
 		}
 
 		if ( !$status->isOK() ) {
-			wfDebugLog( 'FileOperation', get_class( $this ) .
+			wfDebugLog( 'FileOperation', static::class .
 				" failed to resync: " . FormatJson::encode( $paths ) );
 		}
 
@@ -508,7 +507,7 @@ class FileBackendMultiWrite extends FileBackend {
 			$realOps = $this->substOpBatchPaths( $ops, $backend );
 			if ( $this->asyncWrites && !$this->hasVolatileSources( $ops ) ) {
 				DeferredUpdates::addCallableUpdate(
-					function() use ( $backend, $realOps ) {
+					function () use ( $backend, $realOps ) {
 						$backend->doQuickOperations( $realOps );
 					}
 				);
@@ -562,7 +561,7 @@ class FileBackendMultiWrite extends FileBackend {
 			$realParams = $this->substOpPaths( $params, $backend );
 			if ( $this->asyncWrites ) {
 				DeferredUpdates::addCallableUpdate(
-					function() use ( $backend, $method, $realParams ) {
+					function () use ( $backend, $method, $realParams ) {
 						$backend->$method( $realParams );
 					}
 				);

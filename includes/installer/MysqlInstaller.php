@@ -21,6 +21,10 @@
  * @ingroup Deployment
  */
 
+use Wikimedia\Rdbms\Database;
+use Wikimedia\Rdbms\DBQueryError;
+use Wikimedia\Rdbms\DBConnectionError;
+
 /**
  * Class for setting up the MediaWiki database using MySQL.
  *
@@ -47,7 +51,8 @@ class MysqlInstaller extends DatabaseInstaller {
 
 	public $supportedEngines = [ 'InnoDB', 'MyISAM' ];
 
-	public $minimumVersion = '5.0.3';
+	public static $minimumVersion = '5.5.8';
+	protected static $notMiniumumVerisonMessage = 'config-mysql-old';
 
 	public $webUserPrivs = [
 		'DELETE',
@@ -129,12 +134,7 @@ class MysqlInstaller extends DatabaseInstaller {
 		$conn = $status->value;
 
 		// Check version
-		$version = $conn->getServerVersion();
-		if ( version_compare( $version, $this->minimumVersion ) < 0 ) {
-			return Status::newFatal( 'config-mysql-old', $this->minimumVersion, $version );
-		}
-
-		return $status;
+		return static::meetsMinimumRequirement( $conn->getServerVersion() );
 	}
 
 	/**
@@ -175,8 +175,8 @@ class MysqlInstaller extends DatabaseInstaller {
 
 		# Determine existing default character set
 		if ( $conn->tableExists( "revision", __METHOD__ ) ) {
-			$revision = $conn->buildLike( $this->getVar( 'wgDBprefix' ) . 'revision' );
-			$res = $conn->query( "SHOW TABLE STATUS $revision", __METHOD__ );
+			$revision = $this->escapeLikeInternal( $this->getVar( 'wgDBprefix' ) . 'revision', '\\' );
+			$res = $conn->query( "SHOW TABLE STATUS LIKE '$revision'", __METHOD__ );
 			$row = $conn->fetchObject( $res );
 			if ( !$row ) {
 				$this->parent->showMessage( 'config-show-table-status' );
@@ -215,6 +215,17 @@ class MysqlInstaller extends DatabaseInstaller {
 		# just copy these two
 		$wgDBuser = $this->getVar( '_InstallUser' );
 		$wgDBpassword = $this->getVar( '_InstallPassword' );
+	}
+
+	/**
+	 * @param string $s
+	 * @param string $escapeChar
+	 * @return string
+	 */
+	protected function escapeLikeInternal( $s, $escapeChar = '`' ) {
+		return str_replace( [ $escapeChar, '%', '_' ],
+			[ "{$escapeChar}{$escapeChar}", "{$escapeChar}%", "{$escapeChar}_" ],
+			$s );
 	}
 
 	/**
@@ -261,7 +272,7 @@ class MysqlInstaller extends DatabaseInstaller {
 		if ( !$status->isOK() ) {
 			return false;
 		}
-		/** @var $conn Database */
+		/** @var Database $conn */
 		$conn = $status->value;
 
 		// Get current account name
@@ -328,6 +339,8 @@ class MysqlInstaller extends DatabaseInstaller {
 	/**
 	 * Convert a wildcard (as used in LIKE) to a regex
 	 * Slashes are escaped, slash terminators included
+	 * @param string $wildcard
+	 * @return string
 	 */
 	protected function likeToRegex( $wildcard ) {
 		$r = preg_quote( $wildcard, '/' );
@@ -570,7 +583,7 @@ class MysqlInstaller extends DatabaseInstaller {
 							// If we couldn't create for some bizzare reason and the
 							// user probably doesn't exist, skip the grant
 							$this->db->rollback( __METHOD__ );
-							$status->warning( 'config-install-user-create-failed', $dbUser, $dqe->getText() );
+							$status->warning( 'config-install-user-create-failed', $dbUser, $dqe->getMessage() );
 						}
 					}
 				} else {
@@ -590,7 +603,7 @@ class MysqlInstaller extends DatabaseInstaller {
 				$this->db->commit( __METHOD__ );
 			} catch ( DBQueryError $dqe ) {
 				$this->db->rollback( __METHOD__ );
-				$status->fatal( 'config-install-user-grant-failed', $dbUser, $dqe->getText() );
+				$status->fatal( 'config-install-user-grant-failed', $dbUser, $dqe->getMessage() );
 			}
 		}
 

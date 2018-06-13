@@ -2,7 +2,7 @@
 /**
  * Created on Sep 27, 2015
  *
- * Copyright © 2015 Brad Jorsch "bjorsch@wikimedia.org"
+ * Copyright © 2015 Wikimedia Foundation and contributors
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -131,7 +131,7 @@ class ApiQueryAllRevisions extends ApiQueryRevisionsBase {
 		}
 
 		if ( $params['user'] !== null || $params['excludeuser'] !== null ) {
-			// Paranoia: avoid brute force searches (bug 17342)
+			// Paranoia: avoid brute force searches (T19342)
 			if ( !$this->getUser()->isAllowed( 'deletedhistory' ) ) {
 				$bitmask = Revision::DELETED_USER;
 			} elseif ( !$this->getUser()->isAllowedAny( 'suppressrevision', 'viewsuppressed' ) ) {
@@ -290,6 +290,6 @@ class ApiQueryAllRevisions extends ApiQueryRevisionsBase {
 	}
 
 	public function getHelpUrls() {
-		return 'https://www.mediawiki.org/wiki/API:Allrevisions';
+		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Allrevisions';
 	}
 }

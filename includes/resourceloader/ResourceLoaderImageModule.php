@@ -45,9 +45,6 @@ class ResourceLoaderImageModule extends ResourceLoaderModule {
 	protected $selectorWithVariant = '.{prefix}-{name}-{variant}';
 	protected $targets = [ 'desktop', 'mobile' ];
 
-	/** @var string Position on the page to load this module at */
-	protected $position = 'bottom';
-
 	/**
 	 * Constructs a new module from an options array.
 	 *
@@ -73,7 +70,8 @@ class ResourceLoaderImageModule extends ResourceLoaderModule {
 	 *         'selectorWithVariant' => [CSS selector template, variables: {prefix} {name} {variant}],
 	 *         // List of variants that may be used for the image files
 	 *         'variants' => [
-	 *             [theme name] => [
+	 *             // This level of nesting can be omitted if you use the same images for every skin
+	 *             [skin name (or 'default')] => [
 	 *                 [variant name] => [
 	 *                     'color' => [color string, e.g. '#ffff00'],
 	 *                     'global' => [boolean, if true, this variant is available
@@ -85,7 +83,8 @@ class ResourceLoaderImageModule extends ResourceLoaderModule {
 	 *         ],
 	 *         // List of image files and their options
 	 *         'images' => [
-	 *             [theme name] => [
+	 *             // This level of nesting can be omitted if you use the same images for every skin
+	 *             [skin name (or 'default')] => [
 	 *                 [icon name] => [
 	 *                     'file' => [file path string or array whose values are file path strings
 	 *                                    and whose keys are 'default', 'ltr', 'rtl', a single
@@ -183,7 +182,6 @@ class ResourceLoaderImageModule extends ResourceLoaderModule {
 					$this->{$member} = $option;
 					break;
 
-				case 'position':
 				case 'prefix':
 				case 'selectorWithoutVariant':
 				case 'selectorWithVariant':
@@ -319,11 +317,7 @@ class ResourceLoaderImageModule extends ResourceLoaderModule {
 		$selectors = $this->getSelectors();
 
 		foreach ( $this->getImages( $context ) as $name => $image ) {
-			$declarations = $this->getCssDeclarations(
-				$image->getDataUri( $context, null, 'original' ),
-				$image->getUrl( $context, $script, null, 'rasterized' )
-			);
-			$declarations = implode( "\n\t", $declarations );
+			$declarations = $this->getStyleDeclarations( $context, $image, $script );
 			$selector = strtr(
 				$selectors['selectorWithoutVariant'],
 				[
@@ -335,11 +329,7 @@ class ResourceLoaderImageModule extends ResourceLoaderModule {
 			$rules[] = "$selector {\n\t$declarations\n}";
 
 			foreach ( $image->getVariants() as $variant ) {
-				$declarations = $this->getCssDeclarations(
-					$image->getDataUri( $context, $variant, 'original' ),
-					$image->getUrl( $context, $script, $variant, 'rasterized' )
-				);
-				$declarations = implode( "\n\t", $declarations );
+				$declarations = $this->getStyleDeclarations( $context, $image, $script, $variant );
 				$selector = strtr(
 					$selectors['selectorWithVariant'],
 					[
@@ -357,6 +347,28 @@ class ResourceLoaderImageModule extends ResourceLoaderModule {
 	}
 
 	/**
+	 * @param ResourceLoaderContext $context
+	 * @param ResourceLoaderImage $image Image to get the style for
+	 * @param string $script URL to load.php
+	 * @param string|null $variant Variant to get the style for
+	 * @return string
+	 */
+	private function getStyleDeclarations(
+		ResourceLoaderContext $context,
+		ResourceLoaderImage $image,
+		$script,
+		$variant = null
+	) {
+		$imageDataUri = $image->getDataUri( $context, $variant, 'original' );
+		$primaryUrl = $imageDataUri ?: $image->getUrl( $context, $script, $variant, 'original' );
+		$declarations = $this->getCssDeclarations(
+			$primaryUrl,
+			$image->getUrl( $context, $script, $variant, 'rasterized' )
+		);
+		return implode( "\n\t", $declarations );
+	}
+
+	/**
 	 * SVG support using a transparent gradient to guarantee cross-browser
 	 * compatibility (browsers able to understand gradient syntax support also SVG).
 	 * http://pauginer.tumblr.com/post/36614680636/invisible-gradient-technique
@@ -369,11 +381,13 @@ class ResourceLoaderImageModule extends ResourceLoaderModule {
 	 * @return string[] CSS declarations to use given URIs as background-image
 	 */
 	protected function getCssDeclarations( $primary, $fallback ) {
+		$primaryUrl = CSSMin::buildUrlValue( $primary );
+		$fallbackUrl = CSSMin::buildUrlValue( $fallback );
 		return [
-			"background-image: url($fallback);",
-			"background-image: linear-gradient(transparent, transparent), url($primary);",
+			"background-image: $fallbackUrl;",
+			"background-image: linear-gradient(transparent, transparent), $primaryUrl;",
 			// Do not serve SVG to Opera 12, bad rendering with border-radius or background-size (T87504)
-			"background-image: -o-linear-gradient(transparent, transparent), url($fallback);",
+			"background-image: -o-linear-gradient(transparent, transparent), $fallbackUrl;",
 		];
 	}
 
@@ -415,6 +429,8 @@ class ResourceLoaderImageModule extends ResourceLoaderModule {
 
 	/**
 	 * Helper method for getDefinitionSummary.
+	 * @param ResourceLoaderContext $context
+	 * @return array
 	 */
 	protected function getFileHashes( ResourceLoaderContext $context ) {
 		$this->loadFromDefinition();
@@ -446,14 +462,6 @@ class ResourceLoaderImageModule extends ResourceLoaderModule {
 		}
 
 		return $localBasePath;
-	}
-
-	/**
-	 * @return string
-	 */
-	public function getPosition() {
-		$this->loadFromDefinition();
-		return $this->position;
 	}
 
 	/**

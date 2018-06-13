@@ -19,6 +19,11 @@
  * @ingroup Database
  */
 
+namespace Wikimedia\Rdbms;
+
+use BagOStuff;
+use WANObjectCache;
+
 /**
  * Basic MySQL load monitor with no external dependencies
  * Uses memcached to cache the replication lag for a short time
@@ -30,9 +35,9 @@ class LoadMonitorMySQL extends LoadMonitor {
 	private $warmCacheRatio;
 
 	public function __construct(
-		ILoadBalancer $lb, BagOStuff $srvCache, BagOStuff $cache, array $options = []
+		ILoadBalancer $lb, BagOStuff $srvCache, WANObjectCache $wCache, array $options = []
 	) {
-		parent::__construct( $lb, $srvCache, $cache, $options );
+		parent::__construct( $lb, $srvCache, $wCache, $options );
 
 		$this->warmCacheRatio = isset( $options['warmCacheRatio'] )
 			? $options['warmCacheRatio']
@@ -52,11 +57,9 @@ class LoadMonitorMySQL extends LoadMonitor {
 				$host = $this->parent->getServerName( $index );
 				$this->replLogger->error( __METHOD__ . ": could not get status for $host" );
 			} else {
-				// http://dev.mysql.com/doc/refman/5.7/en/server-status-variables.html
+				// https://dev.mysql.com/doc/refman/5.7/en/server-status-variables.html
 				if ( $s->Innodb_buffer_pool_pages_total > 0 ) {
 					$ratio = $s->Innodb_buffer_pool_pages_data / $s->Innodb_buffer_pool_pages_total;
-				} elseif ( $s->Qcache_total_blocks > 0 ) {
-					$ratio = 1.0 - $s->Qcache_free_blocks / $s->Qcache_total_blocks;
 				} else {
 					$ratio = 1.0;
 				}

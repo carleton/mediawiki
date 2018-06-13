@@ -18,7 +18,6 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @author Aaron Schulz
  */
 use Psr\Log\LoggerInterface;
 
@@ -126,7 +125,7 @@ class JobQueueAggregatorRedis extends JobQueueAggregator {
 
 	/**
 	 * @param string $name
-	 * @return string
+	 * @return string[]
 	 */
 	private function decodeQueueName( $name ) {
 		list( $type, $wiki ) = explode( '/', $name, 2 );

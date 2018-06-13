@@ -1,7 +1,5 @@
 <?php
 /**
- * Copyright © 2008 Aaron Schulz
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -36,14 +34,9 @@ class ActiveUsersPager extends UsersPager {
 	protected $opts;
 
 	/**
-	 * @var array
+	 * @var string[]
 	 */
-	protected $hideGroups = [];
-
-	/**
-	 * @var array
-	 */
-	protected $hideRights = [];
+	protected $groups;
 
 	/**
 	 * @var array
@@ -68,11 +61,14 @@ class ActiveUsersPager extends UsersPager {
 			}
 		}
 
-		if ( $opts->getValue( 'hidebots' ) == 1 ) {
-			$this->hideRights[] = 'bot';
+		$this->groups = $opts->getValue( 'groups' );
+		$this->excludegroups = $opts->getValue( 'excludegroups' );
+		// Backwards-compatibility with old URLs
+		if ( $opts->getValue( 'hidebots' ) ) {
+			$this->excludegroups[] = 'bot';
 		}
-		if ( $opts->getValue( 'hidesysops' ) == 1 ) {
-			$this->hideGroups[] = 'sysop';
+		if ( $opts->getValue( 'hidesysops' ) ) {
+			$this->excludegroups[] = 'sysop';
 		}
 	}
 
@@ -85,6 +81,7 @@ class ActiveUsersPager extends UsersPager {
 
 		$activeUserSeconds = $this->getConfig()->get( 'ActiveUserDays' ) * 86400;
 		$timestamp = $dbr->timestamp( wfTimestamp( TS_UNIX ) - $activeUserSeconds );
+		$tables = [ 'querycachetwo', 'user', 'recentchanges' ];
 		$conds = [
 			'qcc_type' => 'activeusers',
 			'qcc_namespace' => NS_USER,
@@ -98,22 +95,38 @@ class ActiveUsersPager extends UsersPager {
 		if ( $this->requestedUser != '' ) {
 			$conds[] = 'qcc_title >= ' . $dbr->addQuotes( $this->requestedUser );
 		}
+		if ( $this->groups !== [] ) {
+			$tables[] = 'user_groups';
+			$conds[] = 'ug_user = user_id';
+			$conds['ug_group'] = $this->groups;
+			$conds[] = 'ug_expiry IS NULL OR ug_expiry >= ' . $dbr->addQuotes( $dbr->timestamp() );
+		}
+		if ( $this->excludegroups !== [] ) {
+			foreach ( $this->excludegroups as $group ) {
+				$conds[] = 'NOT EXISTS (' . $dbr->selectSQLText(
+					'user_groups', '1', [
+						'ug_user = user_id',
+						'ug_group' => $group,
+						'ug_expiry IS NULL OR ug_expiry >= ' . $dbr->addQuotes( $dbr->timestamp() )
+					]
+				) . ')';
+			}
+		}
 		if ( !$this->getUser()->isAllowed( 'hideuser' ) ) {
 			$conds[] = 'NOT EXISTS (' . $dbr->selectSQLText(
 					'ipblocks', '1', [ 'ipb_user=user_id', 'ipb_deleted' => 1 ]
 				) . ')';
 		}
 
-		if ( $dbr->implicitGroupby() ) {
-			$options = [ 'GROUP BY' => [ 'qcc_title' ] ];
-		} else {
-			$options = [ 'GROUP BY' => [ 'user_name', 'user_id', 'qcc_title' ] ];
-		}
-
 		return [
-			'tables' => [ 'querycachetwo', 'user', 'recentchanges' ],
-			'fields' => [ 'user_name', 'user_id', 'recentedits' => 'COUNT(*)', 'qcc_title' ],
-			'options' => $options,
+			'tables' => $tables,
+			'fields' => [
+				'qcc_title',
+				'user_name' => 'qcc_title',
+				'user_id' => 'MAX(user_id)',
+				'recentedits' => 'COUNT(*)'
+			],
+			'options' => [ 'GROUP BY' => [ 'qcc_title' ] ],
 			'conds' => $conds
 		];
 	}
@@ -154,27 +167,9 @@ class ActiveUsersPager extends UsersPager {
 		$list = [];
 		$user = User::newFromId( $row->user_id );
 
-		// User right filter
-		foreach ( $this->hideRights as $right ) {
-			// Calling User::getRights() within the loop so that
-			// if the hideRights() filter is empty, we don't have to
-			// trigger the lazy-init of the big userrights array in the
-			// User object
-			if ( in_array( $right, $user->getRights() ) ) {
-				return '';
-			}
-		}
-
-		// User group filter
-		// Note: This is a different loop than for user rights,
-		// because we're reusing it to build the group links
-		// at the same time
-		$groups_list = self::getGroups( intval( $row->user_id ), $this->userGroupCache );
-		foreach ( $groups_list as $group ) {
-			if ( in_array( $group, $this->hideGroups ) ) {
-				return '';
-			}
-			$list[] = self::buildGroupLink( $group, $userName );
+		$ugms = self::getGroupMemberships( intval( $row->user_id ), $this->userGroupCache );
+		foreach ( $ugms as $ugm ) {
+			$list[] = $this->buildGroupLink( $ugm, $userName );
 		}
 
 		$groups = $lang->commaList( $list );

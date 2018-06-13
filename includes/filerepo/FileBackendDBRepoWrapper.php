@@ -20,8 +20,9 @@
  * @file
  * @ingroup FileRepo
  * @ingroup FileBackend
- * @author Aaron Schulz
  */
+
+use Wikimedia\Rdbms\DBConnRef;
 
 /**
  * @brief Proxy backend that manages file layout rewriting for FileRepo.
@@ -281,7 +282,7 @@ class FileBackendDBRepoWrapper extends FileBackend {
 	/**
 	 * Get a connection to the repo file registry DB
 	 *
-	 * @param integer $index
+	 * @param int $index
 	 * @return DBConnRef
 	 */
 	protected function getDB( $index ) {
@@ -297,6 +298,7 @@ class FileBackendDBRepoWrapper extends FileBackend {
 	 *
 	 * @param string $function
 	 * @param array $params
+	 * @return mixed
 	 */
 	protected function translateSrcParams( $function, array $params ) {
 		$latest = !empty( $params['latest'] );

@@ -41,11 +41,28 @@ class ApiLogin extends ApiBase {
 		parent::__construct( $main, $action, 'lg' );
 	}
 
-	protected function getDescriptionMessage() {
+	protected function getExtendedDescription() {
 		if ( $this->getConfig()->get( 'EnableBotPasswords' ) ) {
-			return 'apihelp-login-description';
+			return 'apihelp-login-extended-description';
 		} else {
-			return 'apihelp-login-description-nobotpasswords';
+			return 'apihelp-login-extended-description-nobotpasswords';
+		}
+	}
+
+	/**
+	 * Format a message for the response
+	 * @param Message|string|array $message
+	 * @return string|array
+	 */
+	private function formatMessage( $message ) {
+		$message = Message::newFromSpecifier( $message );
+		$errorFormatter = $this->getErrorFormatter();
+		if ( $errorFormatter instanceof ApiErrorFormatter_BackCompat ) {
+			return ApiErrorFormatter::stripMarkup(
+				$message->useDatabase( false )->inLanguage( 'en' )->text()
+			);
+		} else {
+			return $errorFormatter->formatMessage( $message );
 		}
 	}
 
@@ -64,19 +81,13 @@ class ApiLogin extends ApiBase {
 		if ( $this->lacksSameOriginSecurity() ) {
 			$this->getResult()->addValue( null, 'login', [
 				'result' => 'Aborted',
-				'reason' => 'Cannot log in when the same-origin policy is not applied',
+				'reason' => $this->formatMessage( 'api-login-fail-sameorigin' ),
 			] );
 
 			return;
 		}
 
-		try {
-			$this->requirePostedParameters( [ 'password', 'token' ] );
-		} catch ( UsageException $ex ) {
-			// Make this a warning for now, upgrade to an error in 1.29.
-			$this->setWarning( $ex->getMessage() );
-			$this->logFeatureUsage( 'login-params-in-query-string' );
-		}
+		$this->requirePostedParameters( [ 'password', 'token' ] );
 
 		$params = $this->extractRequestParams();
 
@@ -90,8 +101,10 @@ class ApiLogin extends ApiBase {
 		if ( !$session->canSetUser() ) {
 			$this->getResult()->addValue( null, 'login', [
 				'result' => 'Aborted',
-				'reason' => 'Cannot log in when using ' .
-					$session->getProvider()->describe( Language::factory( 'en' ) ),
+				'reason' => $this->formatMessage( [
+					'api-login-fail-badsessionprovider',
+					$session->getProvider()->describe( $this->getErrorFormatter()->getLanguage() ),
+				] )
 			] );
 
 			return;
@@ -121,7 +134,7 @@ class ApiLogin extends ApiBase {
 				$session = $status->getValue();
 				$authRes = 'Success';
 				$loginType = 'BotPassword';
-			} elseif ( !$botLoginData[2] ) {
+			} elseif ( !$botLoginData[2] || $status->hasMessage( 'login-throttled' ) ) {
 				$authRes = 'Failed';
 				$message = $status->getMessage();
 				LoggerFactory::getInstance( 'authentication' )->info(
@@ -146,15 +159,10 @@ class ApiLogin extends ApiBase {
 			switch ( $res->status ) {
 				case AuthenticationResponse::PASS:
 					if ( $this->getConfig()->get( 'EnableBotPasswords' ) ) {
-						$warn = 'Main-account login via action=login is deprecated and may stop working ' .
-							'without warning.';
-						$warn .= ' To continue login with action=login, see [[Special:BotPasswords]].';
-						$warn .= ' To safely continue using main-account login, see action=clientlogin.';
+						$this->addDeprecation( 'apiwarn-deprecation-login-botpw', 'main-account-login' );
 					} else {
-						$warn = 'Login via action=login is deprecated and may stop working without warning.';
-						$warn .= ' To safely log in, see action=clientlogin.';
+						$this->addDeprecation( 'apiwarn-deprecation-login-nobotpw', 'main-account-login' );
 					}
-					$this->setWarning( $warn );
 					$authRes = 'Success';
 					$loginType = 'AuthManager';
 					break;
@@ -194,27 +202,22 @@ class ApiLogin extends ApiBase {
 
 			case 'NeedToken':
 				$result['token'] = $token->toString();
-				$this->setWarning( 'Fetching a token via action=login is deprecated. ' .
-				   'Use action=query&meta=tokens&type=login instead.' );
-				$this->logFeatureUsage( 'action=login&!lgtoken' );
+				$this->addDeprecation( 'apiwarn-deprecation-login-token', 'action=login&!lgtoken' );
 				break;
 
 			case 'WrongToken':
 				break;
 
 			case 'Failed':
-				$result['reason'] = $message->useDatabase( 'false' )->inLanguage( 'en' )->text();
+				$result['reason'] = $this->formatMessage( $message );
 				break;
 
 			case 'Aborted':
-				$result['reason'] = 'Authentication requires user interaction, ' .
-				   'which is not supported by action=login.';
-				if ( $this->getConfig()->get( 'EnableBotPasswords' ) ) {
-					$result['reason'] .= ' To be able to login with action=login, see [[Special:BotPasswords]].';
-					$result['reason'] .= ' To continue using main-account login, see action=clientlogin.';
-				} else {
-					$result['reason'] .= ' To log in, see action=clientlogin.';
-				}
+				$result['reason'] = $this->formatMessage(
+					$this->getConfig()->get( 'EnableBotPasswords' )
+						? 'api-login-fail-aborted'
+						: 'api-login-fail-aborted-nobotpw'
+				);
 				break;
 
 			default:
@@ -272,7 +275,7 @@ class ApiLogin extends ApiBase {
 	}
 
 	public function getHelpUrls() {
-		return 'https://www.mediawiki.org/wiki/API:Login';
+		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Login';
 	}
 
 	/**

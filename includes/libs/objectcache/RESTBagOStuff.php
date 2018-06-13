@@ -56,16 +56,16 @@ class RESTBagOStuff extends BagOStuff {
 	}
 
 	/**
-	 * @param string  $key
-	 * @param integer $flags Bitfield of BagOStuff::READ_* constants [optional]
+	 * @param string $key
+	 * @param int $flags Bitfield of BagOStuff::READ_* constants [optional]
 	 * @return mixed Returns false on failure and if the item does not exist
 	 */
 	protected function doGet( $key, $flags = 0 ) {
 		$req = [
 			'method' => 'GET',
-		    'url' => $this->url . rawurlencode( $key ),
-
+			'url' => $this->url . rawurlencode( $key ),
 		];
+
 		list( $rcode, $rdesc, $rhdrs, $rbody, $rerr ) = $this->client->run( $req );
 		if ( $rcode === 200 ) {
 			if ( is_string( $rbody ) ) {
@@ -82,7 +82,7 @@ class RESTBagOStuff extends BagOStuff {
 	/**
 	 * Handle storage error
 	 * @param string $msg Error message
-	 * @param int    $rcode Error code from client
+	 * @param int $rcode Error code from client
 	 * @param string $rerr Error message from client
 	 * @return false
 	 */
@@ -99,9 +99,9 @@ class RESTBagOStuff extends BagOStuff {
 	 * Set an item
 	 *
 	 * @param string $key
-	 * @param mixed  $value
-	 * @param int    $exptime Either an interval in seconds or a unix timestamp for expiry
-	 * @param int    $flags Bitfield of BagOStuff::WRITE_* constants
+	 * @param mixed $value
+	 * @param int $exptime Either an interval in seconds or a unix timestamp for expiry
+	 * @param int $flags Bitfield of BagOStuff::WRITE_* constants
 	 * @return bool Success
 	 */
 	public function set( $key, $value, $exptime = 0, $flags = 0 ) {

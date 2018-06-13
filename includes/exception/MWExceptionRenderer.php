@@ -16,8 +16,12 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @author Aaron Schulz
  */
+
+use Wikimedia\Rdbms\DBConnectionError;
+use Wikimedia\Rdbms\DBError;
+use Wikimedia\Rdbms\DBReadOnlyError;
+use Wikimedia\Rdbms\DBExpectedError;
 
 /**
  * Class to expose exceptions to the client (API bots, users, admins using CLI scripts)
@@ -29,7 +33,7 @@ class MWExceptionRenderer {
 
 	/**
 	 * @param Exception|Throwable $e Original exception
-	 * @param integer $mode MWExceptionExposer::AS_* constant
+	 * @param int $mode MWExceptionExposer::AS_* constant
 	 * @param Exception|Throwable|null $eNew New exception from attempting to show the first
 	 */
 	public static function output( $e, $mode, $eNew = null ) {
@@ -42,10 +46,10 @@ class MWExceptionRenderer {
 		} elseif ( self::isCommandLine() ) {
 			self::printError( self::getText( $e ) );
 		} elseif ( $mode === self::AS_PRETTY ) {
+			self::statusHeader( 500 );
 			if ( $e instanceof DBConnectionError ) {
 				self::reportOutageHTML( $e );
 			} else {
-				self::statusHeader( 500 );
 				self::header( "Content-Type: $wgMimeType; charset=utf-8" );
 				self::reportHTML( $e );
 			}
@@ -60,7 +64,9 @@ class MWExceptionRenderer {
 							MWExceptionHandler::getLogMessage( $eNew ) .
 						"\nBacktrace:\n" . MWExceptionHandler::getRedactedTraceAsString( $eNew );
 				} else {
-					$message .= "Exception caught inside exception handler.\n\n" .
+					$message .= 'Original exception: ' .
+						MWExceptionHandler::getPublicLogMessage( $e );
+					$message .= "\n\nException caught inside exception handler.\n\n" .
 						self::getShowBacktraceError( $e );
 				}
 				$message .= "\n";
@@ -73,57 +79,8 @@ class MWExceptionRenderer {
 					$message = MWExceptionHandler::getPublicLogMessage( $e );
 				}
 			}
-			if ( self::isCommandLine() ) {
-				self::printError( $message );
-			} else {
-				echo nl2br( htmlspecialchars( $message ) ) . "\n";
-			}
+			echo nl2br( htmlspecialchars( $message ) ) . "\n";
 		}
-	}
-
-	/**
-	 * Run hook to allow extensions to modify the text of the exception
-	 *
-	 * Called by MWException for b/c
-	 *
-	 * @param Exception|Throwable $e
-	 * @param string $name Class name of the exception
-	 * @param array $args Arguments to pass to the callback functions
-	 * @return string|null String to output or null if any hook has been called
-	 */
-	public static function runHooks( $e, $name, $args = [] ) {
-		global $wgExceptionHooks;
-
-		if ( !isset( $wgExceptionHooks ) || !is_array( $wgExceptionHooks ) ) {
-			return null; // Just silently ignore
-		}
-
-		if ( !array_key_exists( $name, $wgExceptionHooks ) ||
-			!is_array( $wgExceptionHooks[$name] )
-		) {
-			return null;
-		}
-
-		$hooks = $wgExceptionHooks[$name];
-		$callargs = array_merge( [ $e ], $args );
-
-		foreach ( $hooks as $hook ) {
-			if (
-				is_string( $hook ) ||
-				( is_array( $hook ) && count( $hook ) >= 2 && is_string( $hook[0] ) )
-			) {
-				// 'function' or [ 'class', 'hook' ]
-				$result = call_user_func_array( $hook, $callargs );
-			} else {
-				$result = null;
-			}
-
-			if ( is_string( $result ) ) {
-				return $result;
-			}
-		}
-
-		return null;
 	}
 
 	/**
@@ -138,9 +95,14 @@ class MWExceptionRenderer {
 			}
 		}
 
+		// Don't even bother with OutputPage if there's no Title context set,
+		// (e.g. we're in RL code on load.php) - the Skin system (and probably
+		// most of MediaWiki) won't work.
+
 		return (
 			!empty( $GLOBALS['wgFullyInitialised'] ) &&
 			!empty( $GLOBALS['wgOut'] ) &&
+			RequestContext::getMain()->getTitle() &&
 			!defined( 'MEDIAWIKI_INSTALL' )
 		);
 	}
@@ -164,16 +126,11 @@ class MWExceptionRenderer {
 				$wgOut->prepareErrorPage( self::msg( 'internalerror', 'Internal error' ) );
 			}
 
-			$hookResult = self::runHooks( $e, get_class( $e ) );
-			if ( $hookResult ) {
-				$wgOut->addHTML( $hookResult );
-			} else {
-				// Show any custom GUI message before the details
-				if ( $e instanceof MessageSpecifier ) {
-					$wgOut->addHTML( Message::newFromSpecifier( $e )->escaped() );
-				}
-				$wgOut->addHTML( self::getHTML( $e ) );
+			// Show any custom GUI message before the details
+			if ( $e instanceof MessageSpecifier ) {
+				$wgOut->addHTML( Message::newFromSpecifier( $e )->escaped() );
 			}
+			$wgOut->addHTML( self::getHTML( $e ) );
 
 			$wgOut->output();
 		} else {
@@ -188,12 +145,7 @@ class MWExceptionRenderer {
 				'<style>body { font-family: sans-serif; margin: 0; padding: 0.5em 2em; }</style>' .
 				"</head><body>\n";
 
-			$hookResult = self::runHooks( $e, get_class( $e ) . 'Raw' );
-			if ( $hookResult ) {
-				echo $hookResult;
-			} else {
-				echo self::getHTML( $e );
-			}
+			echo self::getHTML( $e );
 
 			echo "</body></html>\n";
 		}
@@ -209,21 +161,23 @@ class MWExceptionRenderer {
 	 */
 	public static function getHTML( $e ) {
 		if ( self::showBackTrace( $e ) ) {
-			$html = "<div class=\"errorbox\"><p>" .
+			$html = "<div class=\"errorbox mw-content-ltr\"><p>" .
 				nl2br( htmlspecialchars( MWExceptionHandler::getLogMessage( $e ) ) ) .
 				'</p><p>Backtrace:</p><p>' .
 				nl2br( htmlspecialchars( MWExceptionHandler::getRedactedTraceAsString( $e ) ) ) .
 				"</p></div>\n";
 		} else {
 			$logId = WebRequest::getRequestId();
-			$html = "<div class=\"errorbox\">" .
-				'[' . $logId . '] ' .
-				gmdate( 'Y-m-d H:i:s' ) . ": " .
-				self::msg( "internalerror-fatal-exception",
-					"Fatal exception of type $1",
-					get_class( $e ),
-					$logId,
-					MWExceptionHandler::getURL()
+			$html = "<div class=\"errorbox mw-content-ltr\">" .
+				htmlspecialchars(
+					'[' . $logId . '] ' .
+					gmdate( 'Y-m-d H:i:s' ) . ": " .
+					self::msg( "internalerror-fatal-exception",
+						"Fatal exception of type $1",
+						get_class( $e ),
+						$logId,
+						MWExceptionHandler::getURL()
+					)
 				) . "</div>\n" .
 				"<!-- " . wordwrap( self::getShowBacktraceError( $e ), 50 ) . " -->";
 		}
@@ -259,7 +213,7 @@ class MWExceptionRenderer {
 				"\nBacktrace:\n" .
 				MWExceptionHandler::getRedactedTraceAsString( $e ) . "\n";
 		} else {
-			return self::getShowBacktraceError( $e );
+			return self::getShowBacktraceError( $e ) . "\n";
 		}
 	}
 
@@ -290,7 +244,7 @@ class MWExceptionRenderer {
 			$vars[] = '$wgShowDBErrorBacktrace = true;';
 		}
 		$vars = implode( ' and ', $vars );
-		return "Set $vars at the bottom of LocalSettings.php to show detailed debugging information";
+		return "Set $vars at the bottom of LocalSettings.php to show detailed debugging information.";
 	}
 
 	/**
@@ -310,7 +264,7 @@ class MWExceptionRenderer {
 	}
 
 	/**
-	 * @param integer $code
+	 * @param int $code
 	 */
 	private static function statusHeader( $code ) {
 		if ( !headers_sent() ) {
@@ -353,7 +307,7 @@ class MWExceptionRenderer {
 		if ( $wgShowHostnames || $wgShowSQLErrors ) {
 			$info = str_replace(
 				'$1',
-				Html::element( 'span', [ 'dir' => 'ltr' ], htmlspecialchars( $e->getMessage() ) ),
+				Html::element( 'span', [ 'dir' => 'ltr' ], $e->getMessage() ),
 				htmlspecialchars( self::msg( 'dberr-info', '($1)' ) )
 			);
 		} else {

@@ -43,16 +43,16 @@ class ApiFeedContributions extends ApiBase {
 
 		$config = $this->getConfig();
 		if ( !$config->get( 'Feed' ) ) {
-			$this->dieUsage( 'Syndication feeds are not available', 'feed-unavailable' );
+			$this->dieWithError( 'feed-unavailable' );
 		}
 
 		$feedClasses = $config->get( 'FeedClasses' );
 		if ( !isset( $feedClasses[$params['feedformat']] ) ) {
-			$this->dieUsage( 'Invalid subscription feed type', 'feed-invalid' );
+			$this->dieWithError( 'feed-invalid' );
 		}
 
 		if ( $params['showsizediff'] && $this->getConfig()->get( 'MiserMode' ) ) {
-			$this->dieUsage( 'Size difference is disabled in Miser Mode', 'sizediffdisabled' );
+			$this->dieWithError( 'apierror-sizediffdisabled' );
 		}
 
 		$msg = wfMessage( 'Contributions' )->inContentLanguage()->text();
@@ -70,11 +70,16 @@ class ApiFeedContributions extends ApiBase {
 			$feedUrl
 		);
 
+		// Convert year/month parameters to end parameter
+		$params['start'] = '';
+		$params['end'] = '';
+		$params = ContribsPager::processDateFilter( $params );
+
 		$pager = new ContribsPager( $this->getContext(), [
 			'target' => $target,
 			'namespace' => $params['namespace'],
-			'year' => $params['year'],
-			'month' => $params['month'],
+			'start' => $params['start'],
+			'end' => $params['end'],
 			'tagFilter' => $params['tagfilter'],
 			'deletedOnly' => $params['deletedonly'],
 			'topOnly' => $params['toponly'],

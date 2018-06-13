@@ -23,7 +23,12 @@
  * Pager for Special:Contributions
  * @ingroup Pager
  */
-class ContribsPager extends ReverseChronologicalPager {
+use MediaWiki\MediaWikiServices;
+use Wikimedia\Rdbms\ResultWrapper;
+use Wikimedia\Rdbms\FakeResultWrapper;
+use Wikimedia\Rdbms\IDatabase;
+
+class ContribsPager extends RangeChronologicalPager {
 
 	public $mDefaultDirection = IndexPager::DIR_DESCENDING;
 	public $messages;
@@ -39,6 +44,11 @@ class ContribsPager extends ReverseChronologicalPager {
 	 * @var array
 	 */
 	protected $mParentLens;
+
+	/**
+	 * @var TemplateParser
+	 */
+	protected $templateParser;
 
 	function __construct( IContextSource $context, array $options ) {
 		parent::__construct( $context );
@@ -66,15 +76,27 @@ class ContribsPager extends ReverseChronologicalPager {
 		$this->newOnly = !empty( $options['newOnly'] );
 		$this->hideMinor = !empty( $options['hideMinor'] );
 
-		$year = isset( $options['year'] ) ? $options['year'] : false;
-		$month = isset( $options['month'] ) ? $options['month'] : false;
-		$this->getDateCond( $year, $month );
+		// Date filtering: use timestamp if available
+		$startTimestamp = '';
+		$endTimestamp = '';
+		if ( $options['start'] ) {
+			$startTimestamp = $options['start'] . ' 00:00:00';
+		}
+		if ( $options['end'] ) {
+			$endTimestamp = $options['end'] . ' 23:59:59';
+		}
+		$this->getDateRangeCond( $startTimestamp, $endTimestamp );
+
+		// This property on IndexPager is set by $this->getIndexField() in parent::__construct().
+		// We need to reassign it here so that it is used when the actual query is ran.
+		$this->mIndexField = $this->getIndexField();
 
 		// Most of this code will use the 'contributions' group DB, which can map to replica DBs
 		// with extra user based indexes or partioning by user. The additional metadata
 		// queries should use a regular replica DB since the lookup pattern is not all by user.
 		$this->mDbSecondary = wfGetDB( DB_REPLICA ); // any random replica DB
 		$this->mDb = wfGetDB( DB_REPLICA, 'contributions' );
+		$this->templateParser = new TemplateParser();
 	}
 
 	function getDefaultQuery() {
@@ -158,7 +180,7 @@ class ContribsPager extends ReverseChronologicalPager {
 		$user = $this->getUser();
 		$conds = array_merge( $userCond, $this->getNamespaceCond() );
 
-		// Paranoia: avoid brute force searches (bug 17342)
+		// Paranoia: avoid brute force searches (T19342)
 		if ( !$user->isAllowed( 'deletedhistory' ) ) {
 			$conds[] = $this->mDb->bitAnd( 'rev_deleted', Revision::DELETED_USER ) . ' = 0';
 		} elseif ( !$user->isAllowedAny( 'suppressrevision', 'viewsuppressed' ) ) {
@@ -188,6 +210,12 @@ class ContribsPager extends ReverseChronologicalPager {
 			'options' => $options,
 			'join_conds' => $join_cond
 		];
+
+		// For IPv6, we use ipc_rev_timestamp on ip_changes as the index field,
+		// which will be referenced when parsing the results of a query.
+		if ( self::isQueryableRange( $this->target ) ) {
+			$queryInfo['fields'][] = 'ipc_rev_timestamp';
+		}
 
 		ChangeTags::modifyDisplayQuery(
 			$queryInfo['tables'],
@@ -222,7 +250,9 @@ class ContribsPager extends ReverseChronologicalPager {
 				$join_conds['user_groups'] = [
 					'LEFT JOIN', [
 						'ug_user = rev_user',
-						'ug_group' => $groupsWithBotPermission
+						'ug_group' => $groupsWithBotPermission,
+						'ug_expiry IS NULL OR ug_expiry >= ' .
+							$this->mDb->addQuotes( $this->mDb->timestamp() )
 					]
 				];
 			}
@@ -237,8 +267,18 @@ class ContribsPager extends ReverseChronologicalPager {
 				$condition['rev_user'] = $uid;
 				$index = 'user_timestamp';
 			} else {
-				$condition['rev_user_text'] = $this->target;
-				$index = 'usertext_timestamp';
+				$ipRangeConds = $this->getIpRangeConds( $this->mDb, $this->target );
+
+				if ( $ipRangeConds ) {
+					$tables[] = 'ip_changes';
+					$join_conds['ip_changes'] = [
+						'LEFT JOIN', [ 'ipc_rev_id = rev_id' ]
+					];
+					$condition[] = $ipRangeConds;
+				} else {
+					$condition['rev_user_text'] = $this->target;
+					$index = 'usertext_timestamp';
+				}
 			}
 		}
 
@@ -285,8 +325,57 @@ class ContribsPager extends ReverseChronologicalPager {
 		return [];
 	}
 
-	function getIndexField() {
-		return 'rev_timestamp';
+	/**
+	 * Get SQL conditions for an IP range, if applicable
+	 * @param IDatabase      $db
+	 * @param string         $ip The IP address or CIDR
+	 * @return string|false  SQL for valid IP ranges, false if invalid
+	 */
+	private function getIpRangeConds( $db, $ip ) {
+		// First make sure it is a valid range and they are not outside the CIDR limit
+		if ( !$this->isQueryableRange( $ip ) ) {
+			return false;
+		}
+
+		list( $start, $end ) = IP::parseRange( $ip );
+
+		return 'ipc_hex BETWEEN ' . $db->addQuotes( $start ) . ' AND ' . $db->addQuotes( $end );
+	}
+
+	/**
+	 * Is the given IP a range and within the CIDR limit?
+	 *
+	 * @param string $ipRange
+	 * @return bool True if it is valid
+	 * @since 1.30
+	 */
+	public function isQueryableRange( $ipRange ) {
+		$limits = $this->getConfig()->get( 'RangeContributionsCIDRLimit' );
+
+		$bits = IP::parseCIDR( $ipRange )[1];
+		if (
+			( $bits === false ) ||
+			( IP::isIPv4( $ipRange ) && $bits < $limits['IPv4'] ) ||
+			( IP::isIPv6( $ipRange ) && $bits < $limits['IPv6'] )
+		) {
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
+	 * Override of getIndexField() in IndexPager.
+	 * For IP ranges, it's faster to use the replicated ipc_rev_timestamp
+	 * on the `ip_changes` table than the rev_timestamp on the `revision` table.
+	 * @return string Name of field
+	 */
+	public function getIndexField() {
+		if ( $this->isQueryableRange( $this->target ) ) {
+			return 'ipc_rev_timestamp';
+		} else {
+			return 'rev_timestamp';
+		}
 	}
 
 	function doBatchLookups() {
@@ -295,6 +384,7 @@ class ContribsPager extends ReverseChronologicalPager {
 		$parentRevIds = [];
 		$this->mParentLens = [];
 		$batch = new LinkBatch();
+		$isIpRange = $this->isQueryableRange( $this->target );
 		# Give some pointers to make (last) links
 		foreach ( $this->mResult as $row ) {
 			if ( isset( $row->rev_parent_id ) && $row->rev_parent_id ) {
@@ -305,6 +395,9 @@ class ContribsPager extends ReverseChronologicalPager {
 				if ( $this->contribs === 'newbie' ) { // multiple users
 					$batch->add( NS_USER, $row->user_name );
 					$batch->add( NS_USER_TALK, $row->user_name );
+				} elseif ( $isIpRange ) {
+					// If this is an IP range, batch the IP's talk page
+					$batch->add( NS_USER_TALK, $row->rev_user_text );
 				}
 				$batch->add( $row->page_namespace, $row->page_title );
 			}
@@ -345,9 +438,11 @@ class ContribsPager extends ReverseChronologicalPager {
 	 * @return string
 	 */
 	function formatRow( $row ) {
-
 		$ret = '';
 		$classes = [];
+		$attribs = [];
+
+		$linkRenderer = MediaWikiServices::getInstance()->getLinkRenderer();
 
 		/*
 		 * There may be more than just revision rows. To make sure that we'll only be processing
@@ -366,18 +461,19 @@ class ContribsPager extends ReverseChronologicalPager {
 		MediaWiki\restoreWarnings();
 
 		if ( $validRevision ) {
-			$classes = [];
+			$attribs['data-mw-revid'] = $rev->getId();
 
 			$page = Title::newFromRow( $row );
-			$link = Linker::link(
+			$link = $linkRenderer->makeLink(
 				$page,
-				htmlspecialchars( $page->getPrefixedText() ),
+				$page->getPrefixedText(),
 				[ 'class' => 'mw-contributions-title' ],
 				$page->isRedirect() ? [ 'redirect' => 'no' ] : []
 			);
 			# Mark current revisions
 			$topmarktext = '';
 			$user = $this->getUser();
+
 			if ( $row->rev_id === $row->page_latest ) {
 				$topmarktext .= '<span class="mw-uctop">' . $this->messages['uctop'] . '</span>';
 				$classes[] = 'mw-contributions-current';
@@ -391,10 +487,10 @@ class ContribsPager extends ReverseChronologicalPager {
 			}
 			# Is there a visible previous revision?
 			if ( $rev->userCan( Revision::DELETED_TEXT, $user ) && $rev->getParentId() !== 0 ) {
-				$difftext = Linker::linkKnown(
+				$difftext = $linkRenderer->makeKnownLink(
 					$page,
-					$this->messages['diff'],
-					[],
+					new HtmlArmor( $this->messages['diff'] ),
+					[ 'class' => 'mw-changeslist-diff' ],
 					[
 						'diff' => 'prev',
 						'oldid' => $row->rev_id
@@ -403,16 +499,16 @@ class ContribsPager extends ReverseChronologicalPager {
 			} else {
 				$difftext = $this->messages['diff'];
 			}
-			$histlink = Linker::linkKnown(
+			$histlink = $linkRenderer->makeKnownLink(
 				$page,
-				$this->messages['hist'],
-				[],
+				new HtmlArmor( $this->messages['hist'] ),
+				[ 'class' => 'mw-changeslist-history' ],
 				[ 'action' => 'history' ]
 			);
 
 			if ( $row->rev_parent_id === null ) {
 				// For some reason rev_parent_id isn't populated for this row.
-				// Its rumoured this is true on wikipedia for some revisions (bug 34922).
+				// Its rumoured this is true on wikipedia for some revisions (T36922).
 				// Next best thing is to have the total number of bytes.
 				$chardiff = ' <span class="mw-changeslist-separator">. .</span> ';
 				$chardiff .= Linker::formatRevisionSize( $row->rev_len );
@@ -436,9 +532,9 @@ class ContribsPager extends ReverseChronologicalPager {
 			$comment = $lang->getDirMark() . Linker::revComment( $rev, false, true );
 			$date = $lang->userTimeAndDate( $row->rev_timestamp, $user );
 			if ( $rev->userCan( Revision::DELETED_TEXT, $user ) ) {
-				$d = Linker::linkKnown(
+				$d = $linkRenderer->makeKnownLink(
 					$page,
-					htmlspecialchars( $date ),
+					$date,
 					[ 'class' => 'mw-changeslist-date' ],
 					[ 'oldid' => intval( $row->rev_id ) ]
 				);
@@ -450,14 +546,15 @@ class ContribsPager extends ReverseChronologicalPager {
 			}
 
 			# Show user names for /newbies as there may be different users.
-			# Note that we already excluded rows with hidden user names.
-			if ( $this->contribs == 'newbie' ) {
+			# Note that only unprivileged users have rows with hidden user names excluded.
+			# When querying for an IP range, we want to always show user and user talk links.
+			$userlink = '';
+			if ( ( $this->contribs == 'newbie' && !$rev->isDeleted( Revision::DELETED_USER ) )
+				|| $this->isQueryableRange( $this->target ) ) {
 				$userlink = ' . . ' . $lang->getDirMark()
 					. Linker::userLink( $rev->getUser(), $rev->getUserText() );
 				$userlink .= ' ' . $this->msg( 'parentheses' )->rawParams(
-						Linker::userTalkLink( $rev->getUser(), $rev->getUserText() ) )->escaped() . ' ';
-			} else {
-				$userlink = '';
+					Linker::userTalkLink( $rev->getUser(), $rev->getUserText() ) )->escaped() . ' ';
 			}
 
 			$flags = [];
@@ -507,27 +604,28 @@ class ContribsPager extends ReverseChronologicalPager {
 					$this->msg( 'rev-deleted-user-contribs' )->escaped();
 			}
 
-			$templateParser = new TemplateParser();
-			$ret = $templateParser->processTemplate(
+			$ret = $this->templateParser->processTemplate(
 				'SpecialContributionsLine',
 				$templateParams
 			);
 		}
 
 		// Let extensions add data
-		Hooks::run( 'ContributionsLineEnding', [ $this, &$ret, $row, &$classes ] );
+		Hooks::run( 'ContributionsLineEnding', [ $this, &$ret, $row, &$classes, &$attribs ] );
+		$attribs = wfArrayFilterByKey( $attribs, [ Sanitizer::class, 'isReservedDataAttribute' ] );
 
 		// TODO: Handle exceptions in the catch block above.  Do any extensions rely on
 		// receiving empty rows?
 
-		if ( $classes === [] && $ret === '' ) {
+		if ( $classes === [] && $attribs === [] && $ret === '' ) {
 			wfDebug( "Dropping Special:Contribution row that could not be formatted\n" );
 			return "<!-- Could not format Special:Contribution row. -->\n";
 		}
+		$attribs['class'] = $classes;
 
 		// FIXME: The signature of the ContributionsLineEnding hook makes it
 		// very awkward to move this LI wrapper into the template.
-		return Html::rawElement( 'li', [ 'class' => $classes ], $ret ) . "\n";
+		return Html::rawElement( 'li', $attribs, $ret ) . "\n";
 	}
 
 	/**
@@ -552,5 +650,44 @@ class ContribsPager extends ReverseChronologicalPager {
 	 */
 	public function getPreventClickjacking() {
 		return $this->preventClickjacking;
+	}
+
+	/**
+	 * Set up date filter options, given request data.
+	 *
+	 * @param array $opts Options array
+	 * @return array Options array with processed start and end date filter options
+	 */
+	public static function processDateFilter( $opts ) {
+		$start = isset( $opts['start'] ) ? $opts['start'] : '';
+		$end = isset( $opts['end'] ) ? $opts['end'] : '';
+		$year = isset( $opts['year'] ) ? $opts['year'] : '';
+		$month = isset( $opts['month'] ) ? $opts['month'] : '';
+
+		if ( $start !== '' && $end !== '' && $start > $end ) {
+			$temp = $start;
+			$start = $end;
+			$end = $temp;
+		}
+
+		// If year/month legacy filtering options are set, convert them to display the new stamp
+		if ( $year !== '' || $month !== '' ) {
+			// Reuse getDateCond logic, but subtract a day because
+			// the endpoints of our date range appear inclusive
+			// but the internal end offsets are always exclusive
+			$legacyTimestamp = ReverseChronologicalPager::getOffsetDate( $year, $month );
+			$legacyDateTime = new DateTime( $legacyTimestamp->getTimestamp( TS_ISO_8601 ) );
+			$legacyDateTime = $legacyDateTime->modify( '-1 day' );
+
+			// Clear the new timestamp range options if used and
+			// replace with the converted legacy timestamp
+			$start = '';
+			$end = $legacyDateTime->format( 'Y-m-d' );
+		}
+
+		$opts['start'] = $start;
+		$opts['end'] = $end;
+
+		return $opts;
 	}
 }

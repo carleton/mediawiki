@@ -1,5 +1,6 @@
 <?php
 
+use MediaWiki\MediaWikiServices;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -10,24 +11,40 @@ abstract class ResourceLoaderTestCase extends MediaWikiTestCase {
 	const BLANK_VERSION = '09p30q0';
 
 	/**
-	 * @param string $lang
-	 * @param string $dir
+	 * @param array|string $options Language code or options array
+	 * - string 'lang' Language code
+	 * - string 'dir' Language direction (ltr or rtl)
+	 * - string 'modules' Pipe-separated list of module names
+	 * - string|null 'only' "scripts" (unwrapped script), "styles" (stylesheet), or null
+	 *    (mw.loader.implement).
+	 * @param ResourceLoader|null $rl
 	 * @return ResourceLoaderContext
 	 */
-	protected function getResourceLoaderContext( $lang = 'en', $dir = 'ltr' ) {
-		$resourceLoader = new ResourceLoader();
+	protected function getResourceLoaderContext( $options = [], ResourceLoader $rl = null ) {
+		if ( is_string( $options ) ) {
+			// Back-compat for extension tests
+			$options = [ 'lang' => $options ];
+		}
+		$options += [
+			'lang' => 'en',
+			'dir' => 'ltr',
+			'skin' => 'vector',
+			'modules' => 'startup',
+			'only' => 'scripts',
+		];
+		$resourceLoader = $rl ?: new ResourceLoader();
 		$request = new FauxRequest( [
-				'lang' => $lang,
-				'modules' => 'startup',
-				'only' => 'scripts',
-				'skin' => 'vector',
+				'lang' => $options['lang'],
+				'modules' => $options['modules'],
+				'only' => $options['only'],
+				'skin' => $options['skin'],
 				'target' => 'phpunit',
 		] );
 		$ctx = $this->getMockBuilder( 'ResourceLoaderContext' )
 			->setConstructorArgs( [ $resourceLoader, $request ] )
 			->setMethods( [ 'getDirection' ] )
 			->getMock();
-		$ctx->method( 'getDirection' )->willReturn( $dir );
+		$ctx->method( 'getDirection' )->willReturn( $options['dir'] );
 		return $ctx;
 	}
 
@@ -78,6 +95,7 @@ class ResourceLoaderTestModule extends ResourceLoaderModule {
 	protected $isKnownEmpty = false;
 	protected $type = ResourceLoaderModule::LOAD_GENERAL;
 	protected $targets = [ 'phpunit' ];
+	protected $shouldEmbed = null;
 
 	public function __construct( $options = [] ) {
 		foreach ( $options as $key => $value ) {
@@ -127,8 +145,28 @@ class ResourceLoaderTestModule extends ResourceLoaderModule {
 		return $this->isKnownEmpty;
 	}
 
+	public function shouldEmbedModule( ResourceLoaderContext $context ) {
+		return $this->shouldEmbed !== null ? $this->shouldEmbed : parent::shouldEmbedModule( $context );
+	}
+
 	public function enableModuleContentVersion() {
 		return true;
+	}
+}
+
+class ResourceLoaderFileTestModule extends ResourceLoaderFileModule {
+	protected $lessVars = [];
+
+	public function __construct( $options = [], $test = [] ) {
+		parent::__construct( $options );
+
+		foreach ( $test as $key => $value ) {
+			$this->$key = $value;
+		}
+	}
+
+	public function getLessVars( ResourceLoaderContext $context ) {
+		return $this->lessVars;
 	}
 }
 
@@ -140,7 +178,13 @@ class EmptyResourceLoader extends ResourceLoader {
 	// and default registrations are done from ServiceWiring instead.
 	public function __construct( Config $config = null, LoggerInterface $logger = null ) {
 		$this->setLogger( $logger ?: new NullLogger() );
-		$this->config = $config ?: ConfigFactory::getDefaultInstance()->makeConfig( 'main' );
+		$this->config = $config ?: MediaWikiServices::getInstance()->getMainConfig();
+		// Source "local" is required by StartupModule
+		$this->addSource( 'local', $this->config->get( 'LoadScript' ) );
 		$this->setMessageBlobStore( new MessageBlobStore( $this, $this->getLogger() ) );
+	}
+
+	public function getErrors() {
+		return $this->errors;
 	}
 }

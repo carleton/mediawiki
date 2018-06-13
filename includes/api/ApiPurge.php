@@ -25,6 +25,7 @@
  * @file
  */
 use MediaWiki\Logger\LoggerFactory;
+use MediaWiki\MediaWikiServices;
 
 /**
  * API interface for page purging
@@ -37,12 +38,6 @@ class ApiPurge extends ApiBase {
 	 * Purges the cache of a page
 	 */
 	public function execute() {
-		$main = $this->getMain();
-		if ( !$main->isInternalMode() && !$main->getRequest()->wasPosted() ) {
-			$this->logFeatureUsage( 'purge-via-GET' );
-			$this->setWarning( 'Use of action=purge via GET is deprecated. Use POST instead.' );
-		}
-
 		$params = $this->extractRequestParams();
 
 		$continuationManager = new ApiContinuationManager( $this, [], [] );
@@ -61,16 +56,11 @@ class ApiPurge extends ApiBase {
 			ApiQueryBase::addTitleInfo( $r, $title );
 			$page = WikiPage::factory( $title );
 			if ( !$user->pingLimiter( 'purge' ) ) {
-				$flags = WikiPage::PURGE_ALL;
-				if ( !$this->getRequest()->wasPosted() ) {
-					$flags ^= WikiPage::PURGE_GLOBAL_PCACHE; // skip DB_MASTER write
-				}
 				// Directly purge and skip the UI part of purge()
-				$page->doPurge( $flags );
+				$page->doPurge();
 				$r['purged'] = true;
 			} else {
-				$error = $this->parseMsg( [ 'actionthrottledtext' ] );
-				$this->setWarning( $error['info'] );
+				$this->addWarning( 'apierror-ratelimited' );
 			}
 
 			if ( $forceLinkUpdate || $forceRecursiveLinkUpdate ) {
@@ -109,13 +99,12 @@ class ApiPurge extends ApiBase {
 						$r['linkupdate'] = true;
 
 						if ( $enableParserCache ) {
-							$pcache = ParserCache::singleton();
+							$pcache = MediaWikiServices::getInstance()->getParserCache();
 							$pcache->save( $p_result, $page, $popts );
 						}
 					}
 				} else {
-					$error = $this->parseMsg( [ 'actionthrottledtext' ] );
-					$this->setWarning( $error['info'] );
+					$this->addWarning( 'apierror-ratelimited' );
 					$forceLinkUpdate = false;
 				}
 			}
@@ -160,20 +149,7 @@ class ApiPurge extends ApiBase {
 	}
 
 	public function mustBePosted() {
-		// Anonymous users are not allowed a non-POST request
-		return !$this->getUser()->isAllowed( 'purge' );
-	}
-
-	protected function getHelpFlags() {
-		$flags = parent::getHelpFlags();
-
-		// Claim that we must be posted for the purposes of help and paraminfo.
-		// @todo Remove this when self::mustBePosted() is updated for T145649
-		if ( !in_array( 'mustbeposted', $flags, true ) ) {
-			$flags[] = 'mustbeposted';
-		}
-
-		return $flags;
+		return true;
 	}
 
 	public function getAllowedParams( $flags = 0 ) {
@@ -201,6 +177,6 @@ class ApiPurge extends ApiBase {
 	}
 
 	public function getHelpUrls() {
-		return 'https://www.mediawiki.org/wiki/API:Purge';
+		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Purge';
 	}
 }

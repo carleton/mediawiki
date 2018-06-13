@@ -16,7 +16,6 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @author Aaron Schulz
  */
 
 use MediaWiki\Logger\LoggerFactory;
@@ -45,13 +44,14 @@ class ApiStashEdit extends ApiBase {
 
 	const PRESUME_FRESH_TTL_SEC = 30;
 	const MAX_CACHE_TTL = 300; // 5 minutes
+	const MAX_SIGNATURE_TTL = 60;
 
 	public function execute() {
 		$user = $this->getUser();
 		$params = $this->extractRequestParams();
 
 		if ( $user->isBot() ) { // sanity
-			$this->dieUsage( 'This interface is not supported for bots', 'botsnotsupported' );
+			$this->dieWithError( 'apierror-botsnotsupported' );
 		}
 
 		$cache = ObjectCache::getLocalClusterInstance();
@@ -61,26 +61,37 @@ class ApiStashEdit extends ApiBase {
 		if ( !ContentHandler::getForModelID( $params['contentmodel'] )
 			->isSupportedFormat( $params['contentformat'] )
 		) {
-			$this->dieUsage( 'Unsupported content model/format', 'badmodelformat' );
+			$this->dieWithError(
+				[ 'apierror-badformat-generic', $params['contentformat'], $params['contentmodel'] ],
+				'badmodelformat'
+			);
 		}
+
+		$this->requireAtLeastOneParameter( $params, 'stashedtexthash', 'text' );
 
 		$text = null;
 		$textHash = null;
 		if ( strlen( $params['stashedtexthash'] ) ) {
 			// Load from cache since the client indicates the text is the same as last stash
 			$textHash = $params['stashedtexthash'];
+			if ( !preg_match( '/^[0-9a-f]{40}$/', $textHash ) ) {
+				$this->dieWithError( 'apierror-stashedit-missingtext', 'missingtext' );
+			}
 			$textKey = $cache->makeKey( 'stashedit', 'text', $textHash );
 			$text = $cache->get( $textKey );
 			if ( !is_string( $text ) ) {
-				$this->dieUsage( 'No stashed text found with the given hash', 'missingtext' );
+				$this->dieWithError( 'apierror-stashedit-missingtext', 'missingtext' );
 			}
 		} elseif ( $params['text'] !== null ) {
 			// Trim and fix newlines so the key SHA1's match (see WebRequest::getText())
 			$text = rtrim( str_replace( "\r\n", "\n", $params['text'] ) );
 			$textHash = sha1( $text );
 		} else {
-			$this->dieUsage(
-				'The text or stashedtexthash parameter must be given', 'missingtextparam' );
+			$this->dieWithError( [
+				'apierror-missingparam-at-least-one-of',
+				Message::listParam( [ '<var>stashedtexthash</var>', '<var>text</var>' ] ),
+				2,
+			], 'missingparam' );
 		}
 
 		$textContent = ContentHandler::makeContent(
@@ -91,11 +102,11 @@ class ApiStashEdit extends ApiBase {
 			// Page exists: get the merged content with the proposed change
 			$baseRev = Revision::newFromPageId( $page->getId(), $params['baserevid'] );
 			if ( !$baseRev ) {
-				$this->dieUsage( "No revision ID {$params['baserevid']}", 'missingrev' );
+				$this->dieWithError( [ 'apierror-nosuchrevid', $params['baserevid'] ] );
 			}
 			$currentRev = $page->getRevision();
 			if ( !$currentRev ) {
-				$this->dieUsage( "No current revision of page ID {$page->getId()}", 'missingrev' );
+				$this->dieWithError( [ 'apierror-missingrev-pageid', $page->getId() ], 'missingrev' );
 			}
 			// Merge in the new version of the section to get the proposed version
 			$editContent = $page->replaceSectionAtRev(
@@ -105,7 +116,7 @@ class ApiStashEdit extends ApiBase {
 				$baseRev->getId()
 			);
 			if ( !$editContent ) {
-				$this->dieUsage( 'Could not merge updated section.', 'replacefailed' );
+				$this->dieWithError( 'apierror-sectionreplacefailed', 'replacefailed' );
 			}
 			if ( $currentRev->getId() == $baseRev->getId() ) {
 				// Base revision was still the latest; nothing to merge
@@ -115,7 +126,7 @@ class ApiStashEdit extends ApiBase {
 				$baseContent = $baseRev->getContent();
 				$currentContent = $currentRev->getContent();
 				if ( !$baseContent || !$currentContent ) {
-					$this->dieUsage( "Missing content for page ID {$page->getId()}", 'missingrev' );
+					$this->dieWithError( [ 'apierror-missingcontent-pageid', $page->getId() ], 'missingrev' );
 				}
 				$handler = ContentHandler::getForModelID( $baseContent->getModel() );
 				$content = $handler->merge3( $baseContent, $editContent, $currentContent );
@@ -160,7 +171,7 @@ class ApiStashEdit extends ApiBase {
 	 * @param Content $content Edit content
 	 * @param User $user
 	 * @param string $summary Edit summary
-	 * @return integer ApiStashEdit::ERROR_* constant
+	 * @return string ApiStashEdit::ERROR_* constant
 	 * @since 1.25
 	 */
 	public static function parseAndStash( WikiPage $page, Content $content, User $user, $summary ) {
@@ -384,6 +395,12 @@ class ApiStashEdit extends ApiBase {
 		// Put an upper limit on the TTL for sanity to avoid extreme template/file staleness.
 		$since = time() - wfTimestamp( TS_UNIX, $parserOutput->getTimestamp() );
 		$ttl = min( $parserOutput->getCacheExpiry() - $since, self::MAX_CACHE_TTL );
+
+		// Avoid extremely stale user signature timestamps (T84843)
+		if ( $parserOutput->getFlag( 'user-signature' ) ) {
+			$ttl = min( $ttl, self::MAX_SIGNATURE_TTL );
+		}
+
 		if ( $ttl <= 0 ) {
 			return [ null, 0, 'no_ttl' ];
 		}

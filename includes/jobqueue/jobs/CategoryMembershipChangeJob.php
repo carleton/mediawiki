@@ -20,6 +20,7 @@
  * @file
  */
 use MediaWiki\MediaWikiServices;
+use Wikimedia\Rdbms\LBFactory;
 
 /**
  * Job to add recent change entries mentioning category membership changes
@@ -33,7 +34,7 @@ use MediaWiki\MediaWikiServices;
  * @since 1.27
  */
 class CategoryMembershipChangeJob extends Job {
-	/** @var integer|null */
+	/** @var int|null */
 	private $ticket;
 
 	const ENQUEUE_FUDGE_SEC = 60;

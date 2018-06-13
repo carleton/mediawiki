@@ -20,8 +20,13 @@
  * @file
  */
 
+use MediaWiki\Edit\PreparedEdit;
 use \MediaWiki\Logger\LoggerFactory;
 use \MediaWiki\MediaWikiServices;
+use Wikimedia\Rdbms\FakeResultWrapper;
+use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\DBError;
+use Wikimedia\Rdbms\DBUnexpectedError;
 
 /**
  * Class representing a MediaWiki article and history.
@@ -45,7 +50,7 @@ class WikiPage implements Page, IDBAccessObject {
 	public $mLatest = false;             // !< Integer (false means "not loaded")
 	/**@}}*/
 
-	/** @var stdClass Map of cache fields (text, parser output, ect) for a proposed/new edit */
+	/** @var PreparedEdit Map of cache fields (text, parser output, ect) for a proposed/new edit */
 	public $mPreparedEdit = false;
 
 	/**
@@ -83,9 +88,10 @@ class WikiPage implements Page, IDBAccessObject {
 	 */
 	protected $mLinksUpdated = '19700101000000';
 
-	const PURGE_CDN_CACHE = 1; // purge CDN cache for page variant URLs
-	const PURGE_CLUSTER_PCACHE = 2; // purge parser cache in the local datacenter
-	const PURGE_GLOBAL_PCACHE = 4; // set page_touched to clear parser cache in all datacenters
+	/** @deprecated since 1.29. Added in 1.28 for partial purging, no longer used. */
+	const PURGE_CDN_CACHE = 1;
+	const PURGE_CLUSTER_PCACHE = 2;
+	const PURGE_GLOBAL_PCACHE = 4;
 	const PURGE_ALL = 7;
 
 	/**
@@ -151,7 +157,7 @@ class WikiPage implements Page, IDBAccessObject {
 	 * @return WikiPage|null
 	 */
 	public static function newFromID( $id, $from = 'fromdb' ) {
-		// page id's are never 0 or negative, see bug 61166
+		// page ids are never 0 or negative, see T63166
 		if ( $id < 1 ) {
 			return null;
 		}
@@ -207,6 +213,7 @@ class WikiPage implements Page, IDBAccessObject {
 	 * @todo Move this UI stuff somewhere else
 	 *
 	 * @see ContentHandler::getActionOverrides
+	 * @return array
 	 */
 	public function getActionOverrides() {
 		return $this->getContentHandler()->getActionOverrides();
@@ -257,7 +264,7 @@ class WikiPage implements Page, IDBAccessObject {
 		$this->mTimestamp = '';
 		$this->mIsRedirect = false;
 		$this->mLatest = false;
-		// Bug 57026: do not clear mPreparedEdit since prepareTextForEdit() already checks
+		// T59026: do not clear mPreparedEdit since prepareTextForEdit() already checks
 		// the requested rev ID and content against the cached one for equality. For most
 		// content types, the output should not change during the lifetime of this cache.
 		// Clearing it can cause extra parses on edit for no reason.
@@ -316,7 +323,10 @@ class WikiPage implements Page, IDBAccessObject {
 	protected function pageData( $dbr, $conditions, $options = [] ) {
 		$fields = self::selectFields();
 
-		Hooks::run( 'ArticlePageDataBefore', [ &$this, &$fields ] );
+		// Avoid PHP 7.1 warning of passing $this by reference
+		$wikiPage = $this;
+
+		Hooks::run( 'ArticlePageDataBefore', [ &$wikiPage, &$fields ] );
 
 		$row = $dbr->selectRow( 'page', $fields, $conditions, __METHOD__, $options );
 
@@ -374,11 +384,12 @@ class WikiPage implements Page, IDBAccessObject {
 		if ( is_int( $from ) ) {
 			list( $index, $opts ) = DBAccessObjectUtils::getDBOptions( $from );
 			$data = $this->pageDataFromTitle( wfGetDB( $index ), $this->mTitle, $opts );
+			$loadBalancer = MediaWikiServices::getInstance()->getDBLoadBalancer();
 
 			if ( !$data
 				&& $index == DB_REPLICA
-				&& wfGetLB()->getServerCount() > 1
-				&& wfGetLB()->hasOrMadeRecentMasterChanges()
+				&& $loadBalancer->getServerCount() > 1
+				&& $loadBalancer->hasOrMadeRecentMasterChanges()
 			) {
 				$from = self::READ_LATEST;
 				list( $index, $opts ) = DBAccessObjectUtils::getDBOptions( $from );
@@ -421,7 +432,7 @@ class WikiPage implements Page, IDBAccessObject {
 			$this->mLinksUpdated = wfTimestampOrNull( TS_MW, $data->page_links_updated );
 			$this->mIsRedirect = intval( $data->page_is_redirect );
 			$this->mLatest = intval( $data->page_latest );
-			// Bug 37225: $latest may no longer match the cached latest Revision object.
+			// T39225: $latest may no longer match the cached latest Revision object.
 			// Double-check the ID of any cached latest Revision object for consistency.
 			if ( $this->mLastRevision && $this->mLastRevision->getId() != $this->mLatest ) {
 				$this->mLastRevision = null;
@@ -570,37 +581,12 @@ class WikiPage implements Page, IDBAccessObject {
 	 * @return Revision|null
 	 */
 	public function getOldestRevision() {
-
 		// Try using the replica DB first, then try the master
-		$continue = 2;
-		$db = wfGetDB( DB_REPLICA );
-		$revSelectFields = Revision::selectFields();
-
-		$row = null;
-		while ( $continue ) {
-			$row = $db->selectRow(
-				[ 'page', 'revision' ],
-				$revSelectFields,
-				[
-					'page_namespace' => $this->mTitle->getNamespace(),
-					'page_title' => $this->mTitle->getDBkey(),
-					'rev_page = page_id'
-				],
-				__METHOD__,
-				[
-					'ORDER BY' => 'rev_timestamp ASC'
-				]
-			);
-
-			if ( $row ) {
-				$continue = 0;
-			} else {
-				$db = wfGetDB( DB_MASTER );
-				$continue--;
-			}
+		$rev = $this->mTitle->getFirstRevision();
+		if ( !$rev ) {
+			$rev = $this->mTitle->getFirstRevision( Title::GAID_FOR_UPDATE );
 		}
-
-		return $row ? Revision::newFromRow( $row ) : null;
+		return $rev;
 	}
 
 	/**
@@ -618,13 +604,13 @@ class WikiPage implements Page, IDBAccessObject {
 		}
 
 		if ( $this->mDataLoadedFrom == self::READ_LOCKING ) {
-			// Bug 37225: if session S1 loads the page row FOR UPDATE, the result always
+			// T39225: if session S1 loads the page row FOR UPDATE, the result always
 			// includes the latest changes committed. This is true even within REPEATABLE-READ
 			// transactions, where S1 normally only sees changes committed before the first S1
 			// SELECT. Thus we need S1 to also gets the revision row FOR UPDATE; otherwise, it
 			// may not find it since a page row UPDATE and revision row INSERT by S2 may have
 			// happened after the first S1 SELECT.
-			// http://dev.mysql.com/doc/refman/5.0/en/set-transaction.html#isolevel_repeatable-read
+			// https://dev.mysql.com/doc/refman/5.0/en/set-transaction.html#isolevel_repeatable-read
 			$flags = Revision::READ_LOCKING;
 			$revision = Revision::newFromPageId( $this->getId(), $latest, $flags );
 		} elseif ( $this->mDataLoadedFrom == self::READ_LATEST ) {
@@ -683,28 +669,6 @@ class WikiPage implements Page, IDBAccessObject {
 			return $this->mLastRevision->getContent( $audience, $user );
 		}
 		return null;
-	}
-
-	/**
-	 * Get the text of the current revision. No side-effects...
-	 *
-	 * @param int $audience One of:
-	 *   Revision::FOR_PUBLIC       to be displayed to all users
-	 *   Revision::FOR_THIS_USER    to be displayed to the given user
-	 *   Revision::RAW              get the text regardless of permissions
-	 * @param User $user User object to check for, only if FOR_THIS_USER is passed
-	 *   to the $audience parameter
-	 * @return string|bool The text of the current revision
-	 * @deprecated since 1.21, getContent() should be used instead.
-	 */
-	public function getText( $audience = Revision::FOR_PUBLIC, User $user = null ) {
-		wfDeprecated( __METHOD__, '1.21' );
-
-		$this->loadLastEdit();
-		if ( $this->mLastRevision ) {
-			return $this->mLastRevision->getText( $audience, $user );
-		}
-		return false;
 	}
 
 	/**
@@ -820,7 +784,7 @@ class WikiPage implements Page, IDBAccessObject {
 	 * Determine whether a page would be suitable for being counted as an
 	 * article in the site_stats table based on the title & its content
 	 *
-	 * @param object|bool $editInfo (false): object returned by prepareTextForEdit(),
+	 * @param PreparedEdit|bool $editInfo (false): object returned by prepareTextForEdit(),
 	 *   if false, the current database state will be used
 	 * @return bool
 	 */
@@ -915,11 +879,10 @@ class WikiPage implements Page, IDBAccessObject {
 		}
 
 		// Update the DB post-send if the page has not cached since now
-		$that = $this;
 		$latest = $this->getLatest();
 		DeferredUpdates::addCallableUpdate(
-			function () use ( $that, $retval, $latest ) {
-				$that->insertRedirectEntry( $retval, $latest );
+			function () use ( $retval, $latest ) {
+				$this->insertRedirectEntry( $retval, $latest );
 			},
 			DeferredUpdates::POSTSEND,
 			wfGetDB( DB_MASTER )
@@ -938,10 +901,17 @@ class WikiPage implements Page, IDBAccessObject {
 		$dbw->startAtomic( __METHOD__ );
 
 		if ( !$oldLatest || $oldLatest == $this->lockAndGetLatest() ) {
-			$dbw->replace( 'redirect',
-				[ 'rd_from' ],
+			$dbw->upsert(
+				'redirect',
 				[
 					'rd_from' => $this->getId(),
+					'rd_namespace' => $rt->getNamespace(),
+					'rd_title' => $rt->getDBkey(),
+					'rd_fragment' => $rt->getFragment(),
+					'rd_interwiki' => $rt->getInterwiki(),
+				],
+				[ 'rd_from' ],
+				[
 					'rd_namespace' => $rt->getNamespace(),
 					'rd_title' => $rt->getDBkey(),
 					'rd_fragment' => $rt->getFragment(),
@@ -1077,9 +1047,9 @@ class WikiPage implements Page, IDBAccessObject {
 	 *
 	 * @since 1.19
 	 * @param ParserOptions $parserOptions ParserOptions to use for the parse operation
-	 * @param null|int      $oldid Revision ID to get the text from, passing null or 0 will
-	 *                             get the current revision (default value)
-	 * @param bool          $forceParse Force reindexing, regardless of cache settings
+	 * @param null|int $oldid Revision ID to get the text from, passing null or 0 will
+	 *   get the current revision (default value)
+	 * @param bool $forceParse Force reindexing, regardless of cache settings
 	 * @return bool|ParserOutput ParserOutput or false if the revision was not found
 	 */
 	public function getParserOutput(
@@ -1087,6 +1057,13 @@ class WikiPage implements Page, IDBAccessObject {
 	) {
 		$useParserCache =
 			( !$forceParse ) && $this->shouldCheckParserCache( $parserOptions, $oldid );
+
+		if ( $useParserCache && !$parserOptions->isSafeToCache() ) {
+			throw new InvalidArgumentException(
+				'The supplied ParserOptions are not safe to cache. Fix the options or set $forceParse = true.'
+			);
+		}
+
 		wfDebug( __METHOD__ .
 			': using parser cache: ' . ( $useParserCache ? 'yes' : 'no' ) . "\n" );
 		if ( $parserOptions->getStubThreshold() ) {
@@ -1094,7 +1071,8 @@ class WikiPage implements Page, IDBAccessObject {
 		}
 
 		if ( $useParserCache ) {
-			$parserOutput = ParserCache::singleton()->get( $this, $parserOptions );
+			$parserOutput = MediaWikiServices::getInstance()->getParserCache()
+				->get( $this, $parserOptions );
 			if ( $parserOutput !== false ) {
 				return $parserOutput;
 			}
@@ -1132,56 +1110,31 @@ class WikiPage implements Page, IDBAccessObject {
 
 	/**
 	 * Perform the actions of a page purging
-	 * @param integer $flags Bitfield of WikiPage::PURGE_* constants
 	 * @return bool
+	 * @note In 1.28 (and only 1.28), this took a $flags parameter that
+	 *  controlled how much purging was done.
 	 */
-	public function doPurge( $flags = self::PURGE_ALL ) {
-		if ( !Hooks::run( 'ArticlePurge', [ &$this ] ) ) {
+	public function doPurge() {
+		// Avoid PHP 7.1 warning of passing $this by reference
+		$wikiPage = $this;
+
+		if ( !Hooks::run( 'ArticlePurge', [ &$wikiPage ] ) ) {
 			return false;
 		}
 
-		if ( ( $flags & self::PURGE_GLOBAL_PCACHE ) == self::PURGE_GLOBAL_PCACHE ) {
-			// Set page_touched in the database to invalidate all DC caches
-			$this->mTitle->invalidateCache();
-		} elseif ( ( $flags & self::PURGE_CLUSTER_PCACHE ) == self::PURGE_CLUSTER_PCACHE ) {
-			// Delete the parser options key in the local cluster to invalidate the DC cache
-			ParserCache::singleton()->deleteOptionsKey( $this );
-			// Avoid sending HTTP 304s in ViewAction to the client who just issued the purge
-			$cache = ObjectCache::getLocalClusterInstance();
-			$cache->set(
-				$cache->makeKey( 'page', 'last-dc-purge', $this->getId() ),
-				wfTimestamp( TS_MW ),
-				$cache::TTL_HOUR
-			);
-		}
+		$this->mTitle->invalidateCache();
 
-		if ( ( $flags & self::PURGE_CDN_CACHE ) == self::PURGE_CDN_CACHE ) {
-			// Clear any HTML file cache
-			HTMLFileCache::clearFileCache( $this->getTitle() );
-			// Send purge after any page_touched above update was committed
-			DeferredUpdates::addUpdate(
-				new CdnCacheUpdate( $this->mTitle->getCdnUrls() ),
-				DeferredUpdates::PRESEND
-			);
-		}
+		// Clear file cache
+		HTMLFileCache::clearFileCache( $this->getTitle() );
+		// Send purge after above page_touched update was committed
+		DeferredUpdates::addUpdate(
+			new CdnCacheUpdate( $this->mTitle->getCdnUrls() ),
+			DeferredUpdates::PRESEND
+		);
 
 		if ( $this->mTitle->getNamespace() == NS_MEDIAWIKI ) {
-			// @todo move this logic to MessageCache
-			if ( $this->exists() ) {
-				// NOTE: use transclusion text for messages.
-				//       This is consistent with  MessageCache::getMsgFromNamespace()
-
-				$content = $this->getContent();
-				$text = $content === null ? null : $content->getWikitextForTransclusion();
-
-				if ( $text === null ) {
-					$text = false;
-				}
-			} else {
-				$text = false;
-			}
-
-			MessageCache::singleton()->replace( $this->mTitle->getDBkey(), $text );
+			$messageCache = MessageCache::singleton();
+			$messageCache->updateMessageOverride( $this->mTitle, $this->getContent() );
 		}
 
 		return true;
@@ -1192,11 +1145,11 @@ class WikiPage implements Page, IDBAccessObject {
 	 *
 	 * @return string|bool TS_MW timestamp or false
 	 * @since 1.28
+	 * @deprecated since 1.29. It will always return false.
 	 */
 	public function getLastPurgeTimestamp() {
-		$cache = ObjectCache::getLocalClusterInstance();
-
-		return $cache->get( $cache->makeKey( 'page', 'last-dc-purge', $this->getId() ) );
+		wfDeprecated( __METHOD__, '1.29' );
+		return false;
 	}
 
 	/**
@@ -1214,11 +1167,10 @@ class WikiPage implements Page, IDBAccessObject {
 	 *   page ID is already in use.
 	 */
 	public function insertOn( $dbw, $pageId = null ) {
-		$pageIdForInsert = $pageId ?: $dbw->nextSequenceValue( 'page_page_id_seq' );
+		$pageIdForInsert = $pageId ? [ 'page_id' => $pageId ] : [];
 		$dbw->insert(
 			'page',
 			[
-				'page_id'           => $pageIdForInsert,
 				'page_namespace'    => $this->mTitle->getNamespace(),
 				'page_title'        => $this->mTitle->getDBkey(),
 				'page_restrictions' => '',
@@ -1228,13 +1180,13 @@ class WikiPage implements Page, IDBAccessObject {
 				'page_touched'      => $dbw->timestamp(),
 				'page_latest'       => 0, // Fill this in shortly...
 				'page_len'          => 0, // Fill this in shortly...
-			],
+			] + $pageIdForInsert,
 			__METHOD__,
 			'IGNORE'
 		);
 
 		if ( $dbw->affectedRows() > 0 ) {
-			$newid = $pageId ?: $dbw->insertId();
+			$newid = $pageId ? (int)$pageId : $dbw->insertId();
 			$this->mId = $newid;
 			$this->mTitle->resetArticleID( $newid );
 
@@ -1364,7 +1316,6 @@ class WikiPage implements Page, IDBAccessObject {
 	 * @return bool
 	 */
 	public function updateIfNewerOn( $dbw, $revision ) {
-
 		$row = $dbw->selectRow(
 			[ 'revision', 'page' ],
 			[ 'rev_id', 'rev_timestamp', 'page_is_redirect' ],
@@ -1420,7 +1371,7 @@ class WikiPage implements Page, IDBAccessObject {
 	}
 
 	/**
-	 * @param string|number|null|bool $sectionId Section identifier as a number or string
+	 * @param string|int|null|bool $sectionId Section identifier as a number or string
 	 * (e.g. 0, 1 or 'T-1'), null/false or an empty string for the whole page
 	 * or 'new' for a new section.
 	 * @param Content $sectionContent New content of the section.
@@ -1436,7 +1387,6 @@ class WikiPage implements Page, IDBAccessObject {
 	public function replaceSectionContent(
 		$sectionId, Content $sectionContent, $sectionTitle = '', $edittime = null
 	) {
-
 		$baseRevId = null;
 		if ( $edittime && $sectionId !== 'new' ) {
 			$dbr = wfGetDB( DB_REPLICA );
@@ -1460,7 +1410,7 @@ class WikiPage implements Page, IDBAccessObject {
 	}
 
 	/**
-	 * @param string|number|null|bool $sectionId Section identifier as a number or string
+	 * @param string|int|null|bool $sectionId Section identifier as a number or string
 	 * (e.g. 0, 1 or 'T-1'), null/false or an empty string for the whole page
 	 * or 'new' for a new section.
 	 * @param Content $sectionContent New content of the section.
@@ -1475,7 +1425,6 @@ class WikiPage implements Page, IDBAccessObject {
 	public function replaceSectionAtRev( $sectionId, Content $sectionContent,
 		$sectionTitle = '', $baseRevId = null
 	) {
-
 		if ( strval( $sectionId ) === '' ) {
 			// Whole-page edit; let the whole text through
 			$newContent = $sectionContent;
@@ -1485,7 +1434,7 @@ class WikiPage implements Page, IDBAccessObject {
 					$this->getContentHandler()->getModelID() );
 			}
 
-			// Bug 30711: always use current version when adding a new section
+			// T32711: always use current version when adding a new section
 			if ( is_null( $baseRevId ) || $sectionId === 'new' ) {
 				$oldContent = $this->getContent();
 			} else {
@@ -1531,68 +1480,6 @@ class WikiPage implements Page, IDBAccessObject {
 	 * Change an existing article or create a new article. Updates RC and all necessary caches,
 	 * optionally via the deferred update array.
 	 *
-	 * @param string $text New text
-	 * @param string $summary Edit summary
-	 * @param int $flags Bitfield:
-	 *      EDIT_NEW
-	 *          Article is known or assumed to be non-existent, create a new one
-	 *      EDIT_UPDATE
-	 *          Article is known or assumed to be pre-existing, update it
-	 *      EDIT_MINOR
-	 *          Mark this edit minor, if the user is allowed to do so
-	 *      EDIT_SUPPRESS_RC
-	 *          Do not log the change in recentchanges
-	 *      EDIT_FORCE_BOT
-	 *          Mark the edit a "bot" edit regardless of user rights
-	 *      EDIT_AUTOSUMMARY
-	 *          Fill in blank summaries with generated text where possible
-	 *      EDIT_INTERNAL
-	 *          Signal that the page retrieve/save cycle happened entirely in this request.
-	 *
-	 * If neither EDIT_NEW nor EDIT_UPDATE is specified, the status of the
-	 * article will be detected. If EDIT_UPDATE is specified and the article
-	 * doesn't exist, the function will return an edit-gone-missing error. If
-	 * EDIT_NEW is specified and the article does exist, an edit-already-exists
-	 * error will be returned. These two conditions are also possible with
-	 * auto-detection due to MediaWiki's performance-optimised locking strategy.
-	 *
-	 * @param bool|int $baseRevId The revision ID this edit was based off, if any.
-	 *   This is not the parent revision ID, rather the revision ID for older
-	 *   content used as the source for a rollback, for example.
-	 * @param User $user The user doing the edit
-	 *
-	 * @throws MWException
-	 * @return Status Possible errors:
-	 *   edit-hook-aborted: The ArticleSave hook aborted the edit but didn't
-	 *     set the fatal flag of $status
-	 *   edit-gone-missing: In update mode, but the article didn't exist.
-	 *   edit-conflict: In update mode, the article changed unexpectedly.
-	 *   edit-no-change: Warning that the text was the same as before.
-	 *   edit-already-exists: In creation mode, but the article already exists.
-	 *
-	 * Extensions may define additional errors.
-	 *
-	 * $return->value will contain an associative array with members as follows:
-	 *     new: Boolean indicating if the function attempted to create a new article.
-	 *     revision: The revision object for the inserted revision, or null.
-	 *
-	 * Compatibility note: this function previously returned a boolean value
-	 * indicating success/failure
-	 *
-	 * @deprecated since 1.21: use doEditContent() instead.
-	 */
-	public function doEdit( $text, $summary, $flags = 0, $baseRevId = false, $user = null ) {
-		wfDeprecated( __METHOD__, '1.21' );
-
-		$content = ContentHandler::makeContent( $text, $this->getTitle() );
-
-		return $this->doEditContent( $content, $summary, $flags, $baseRevId, $user );
-	}
-
-	/**
-	 * Change an existing article or create a new article. Updates RC and all necessary caches,
-	 * optionally via the deferred update array.
-	 *
 	 * @param Content $content New content
 	 * @param string $summary Edit summary
 	 * @param int $flags Bitfield:
@@ -1627,6 +1514,7 @@ class WikiPage implements Page, IDBAccessObject {
 	 * @param array|null $tags Change tags to apply to this edit
 	 * Callers are responsible for permission checks
 	 * (with ChangeTags::canAddTagsAccompanyingChange)
+	 * @param Int $undidRevId Id of revision that was undone or 0
 	 *
 	 * @throws MWException
 	 * @return Status Possible errors:
@@ -1648,7 +1536,7 @@ class WikiPage implements Page, IDBAccessObject {
 	 */
 	public function doEditContent(
 		Content $content, $summary, $flags = 0, $baseRevId = false,
-		User $user = null, $serialFormat = null, $tags = []
+		User $user = null, $serialFormat = null, $tags = [], $undidRevId = 0
 	) {
 		global $wgUser, $wgUseAutomaticEditSummaries;
 
@@ -1677,14 +1565,15 @@ class WikiPage implements Page, IDBAccessObject {
 		$user = $user ?: $wgUser;
 		$flags = $this->checkFlags( $flags );
 
+		// Avoid PHP 7.1 warning of passing $this by reference
+		$wikiPage = $this;
+
 		// Trigger pre-save hook (using provided edit summary)
 		$hookStatus = Status::newGood( [] );
-		$hook_args = [ &$this, &$user, &$content, &$summary,
+		$hook_args = [ &$wikiPage, &$user, &$content, &$summary,
 							$flags & EDIT_MINOR, null, null, &$flags, &$hookStatus ];
 		// Check if the hook rejected the attempted save
-		if ( !Hooks::run( 'PageContentSave', $hook_args )
-			|| !ContentHandler::runLegacyHooks( 'ArticleSave', $hook_args, '1.21' )
-		) {
+		if ( !Hooks::run( 'PageContentSave', $hook_args ) ) {
 			if ( $hookStatus->isOK() ) {
 				// Hook returned false but didn't call fatal(); use generic message
 				$hookStatus->fatal( 'edit-hook-aborted' );
@@ -1719,7 +1608,7 @@ class WikiPage implements Page, IDBAccessObject {
 		$meta = [
 			'bot' => ( $flags & EDIT_FORCE_BOT ),
 			'minor' => ( $flags & EDIT_MINOR ) && $user->isAllowed( 'minoredit' ),
-			'serialized' => $editInfo->pst,
+			'serialized' => $pstContent->serialize( $serialFormat ),
 			'serialFormat' => $serialFormat,
 			'baseRevId' => $baseRevId,
 			'oldRevision' => $old_revision,
@@ -1727,7 +1616,8 @@ class WikiPage implements Page, IDBAccessObject {
 			'oldId' => $this->getLatest(),
 			'oldIsRedirect' => $this->isRedirect(),
 			'oldCountable' => $this->isCountable(),
-			'tags' => ( $tags !== null ) ? (array)$tags : []
+			'tags' => ( $tags !== null ) ? (array)$tags : [],
+			'undidRevId' => $undidRevId
 		];
 
 		// Actually create the revision and create/update the page
@@ -1748,7 +1638,7 @@ class WikiPage implements Page, IDBAccessObject {
 
 	/**
 	 * @param Content $content Pre-save transform content
-	 * @param integer $flags
+	 * @param int $flags
 	 * @param User $user
 	 * @param string $summary
 	 * @param array $meta
@@ -1769,7 +1659,7 @@ class WikiPage implements Page, IDBAccessObject {
 		// Convenience variables
 		$now = wfTimestampNow();
 		$oldid = $meta['oldId'];
-		/** @var $oldContent Content|null */
+		/** @var Content|null $oldContent */
 		$oldContent = $meta['oldContent'];
 		$newsize = $content->getSize();
 
@@ -1779,7 +1669,7 @@ class WikiPage implements Page, IDBAccessObject {
 
 			return $status;
 		} elseif ( !$oldContent ) {
-			// Sanity check for bug 37225
+			// Sanity check for T39225
 			throw new MWException( "Could not find text for current revision {$oldid}." );
 		}
 
@@ -1867,7 +1757,7 @@ class WikiPage implements Page, IDBAccessObject {
 			$dbw->endAtomic( __METHOD__ );
 			$this->mTimestamp = $now;
 		} else {
-			// Bug 32948: revision ID must be set to page {{REVISIONID}} and
+			// T34948: revision ID must be set to page {{REVISIONID}} and
 			// related variables correctly. Likewise for {{REVISIONUSER}} (T135261).
 			$revision->setId( $this->getLatest() );
 			$revision->setUserIdAndName(
@@ -1905,10 +1795,12 @@ class WikiPage implements Page, IDBAccessObject {
 							'oldrevision' => $meta['oldRevision']
 						]
 					);
+					// Avoid PHP 7.1 warning of passing $this by reference
+					$wikiPage = $this;
 					// Trigger post-save hook
-					$params = [ &$this, &$user, $content, $summary, $flags & EDIT_MINOR,
-						null, null, &$flags, $revision, &$status, $meta['baseRevId'] ];
-					ContentHandler::runLegacyHooks( 'ArticleSaveComplete', $params );
+					$params = [ &$wikiPage, &$user, $content, $summary, $flags & EDIT_MINOR,
+						null, null, &$flags, $revision, &$status, $meta['baseRevId'],
+						$meta['undidRevId'] ];
 					Hooks::run( 'PageContentSaveComplete', $params );
 				}
 			),
@@ -1920,7 +1812,7 @@ class WikiPage implements Page, IDBAccessObject {
 
 	/**
 	 * @param Content $content Pre-save transform content
-	 * @param integer $flags
+	 * @param int $flags
 	 * @param User $user
 	 * @param string $summary
 	 * @param array $meta
@@ -2025,16 +1917,15 @@ class WikiPage implements Page, IDBAccessObject {
 				) {
 					// Update links, etc.
 					$this->doEditUpdates( $revision, $user, [ 'created' => true ] );
+					// Avoid PHP 7.1 warning of passing $this by reference
+					$wikiPage = $this;
 					// Trigger post-create hook
-					$params = [ &$this, &$user, $content, $summary,
-						$flags & EDIT_MINOR, null, null, &$flags, $revision ];
-					ContentHandler::runLegacyHooks( 'ArticleInsertComplete', $params, '1.21' );
+					$params = [ &$wikiPage, &$user, $content, $summary,
+								$flags & EDIT_MINOR, null, null, &$flags, $revision ];
 					Hooks::run( 'PageContentInsertComplete', $params );
 					// Trigger post-save hook
-					$params = array_merge( $params, [ &$status, $meta['baseRevId'] ] );
-					ContentHandler::runLegacyHooks( 'ArticleSaveComplete', $params, '1.21' );
+					$params = array_merge( $params, [ &$status, $meta['baseRevId'], 0 ] );
 					Hooks::run( 'PageContentSaveComplete', $params );
-
 				}
 			),
 			DeferredUpdates::PRESEND
@@ -2070,24 +1961,10 @@ class WikiPage implements Page, IDBAccessObject {
 	}
 
 	/**
-	 * Prepare text which is about to be saved.
-	 * Returns a stdClass with source, pst and output members
-	 *
-	 * @param string $text
-	 * @param int|null $revid
-	 * @param User|null $user
-	 * @deprecated since 1.21: use prepareContentForEdit instead.
-	 * @return object
-	 */
-	public function prepareTextForEdit( $text, $revid = null, User $user = null ) {
-		wfDeprecated( __METHOD__, '1.21' );
-		$content = ContentHandler::makeContent( $text, $this->getTitle() );
-		return $this->prepareContentForEdit( $content, $revid, $user );
-	}
-
-	/**
 	 * Prepare content which is about to be saved.
-	 * Returns a stdClass with source, pst and output members
+	 *
+	 * Prior to 1.30, this returned a stdClass object with the same class
+	 * members.
 	 *
 	 * @param Content $content
 	 * @param Revision|int|null $revision Revision object. For backwards compatibility, a
@@ -2096,7 +1973,7 @@ class WikiPage implements Page, IDBAccessObject {
 	 * @param string|null $serialFormat
 	 * @param bool $useCache Check shared prepared edit cache
 	 *
-	 * @return object
+	 * @return PreparedEdit
 	 *
 	 * @since 1.21
 	 */
@@ -2113,6 +1990,7 @@ class WikiPage implements Page, IDBAccessObject {
 			// This code path is deprecated, and nothing is known to
 			// use it, so performance here shouldn't be a worry.
 			if ( $revid !== null ) {
+				wfDeprecated( __METHOD__ . ' with $revision = revision ID', '1.25' );
 				$revision = Revision::newFromId( $revid, Revision::READ_LATEST );
 			} else {
 				$revision = null;
@@ -2122,7 +2000,7 @@ class WikiPage implements Page, IDBAccessObject {
 		$user = is_null( $user ) ? $wgUser : $user;
 		// XXX: check $user->getId() here???
 
-		// Use a sane default for $serialFormat, see bug 57026
+		// Use a sane default for $serialFormat, see T59026
 		if ( $serialFormat === null ) {
 			$serialFormat = $content->getContentHandler()->getDefaultFormat();
 		}
@@ -2146,7 +2024,7 @@ class WikiPage implements Page, IDBAccessObject {
 		$popts = ParserOptions::newFromUserAndLang( $user, $wgContLang );
 		Hooks::run( 'ArticlePrepareTextForEdit', [ $this, $popts ] );
 
-		$edit = (object)[];
+		$edit = new PreparedEdit();
 		if ( $cachedEdit ) {
 			$edit->timestamp = $cachedEdit->timestamp;
 		} else {
@@ -2185,8 +2063,12 @@ class WikiPage implements Page, IDBAccessObject {
 				);
 			} else {
 				// Try to avoid a second parse if {{REVISIONID}} is used
-				$edit->popts->setSpeculativeRevIdCallback( function () {
-					return 1 + (int)wfGetDB( DB_MASTER )->selectField(
+				$dbIndex = ( $this->mDataLoadedFrom & self::READ_LATEST ) === self::READ_LATEST
+					? DB_MASTER // use the best possible guess
+					: DB_REPLICA; // T154554
+
+				$edit->popts->setSpeculativeRevIdCallback( function () use ( $dbIndex ) {
+					return 1 + (int)wfGetDB( $dbIndex )->selectField(
 						'revision',
 						'MAX(rev_id)',
 						[],
@@ -2230,20 +2112,20 @@ class WikiPage implements Page, IDBAccessObject {
 	 * @param Revision $revision
 	 * @param User $user User object that did the revision
 	 * @param array $options Array of options, following indexes are used:
-	 * - changed: boolean, whether the revision changed the content (default true)
-	 * - created: boolean, whether the revision created the page (default false)
-	 * - moved: boolean, whether the page was moved (default false)
-	 * - restored: boolean, whether the page was undeleted (default false)
+	 * - changed: bool, whether the revision changed the content (default true)
+	 * - created: bool, whether the revision created the page (default false)
+	 * - moved: bool, whether the page was moved (default false)
+	 * - restored: bool, whether the page was undeleted (default false)
 	 * - oldrevision: Revision object for the pre-update revision (default null)
-	 * - oldcountable: boolean, null, or string 'no-change' (default null):
-	 *   - boolean: whether the page was counted as an article before that
+	 * - oldcountable: bool, null, or string 'no-change' (default null):
+	 *   - bool: whether the page was counted as an article before that
 	 *     revision, only used in changed is true and created is false
 	 *   - null: if created is false, don't update the article count; if created
 	 *     is true, do update the article count
 	 *   - 'no-change': don't update the article count, ever
 	 */
 	public function doEditUpdates( Revision $revision, User $user, array $options = [] ) {
-		global $wgRCWatchCategoryMembership, $wgContLang;
+		global $wgRCWatchCategoryMembership;
 
 		$options += [
 			'changed' => true,
@@ -2283,14 +2165,14 @@ class WikiPage implements Page, IDBAccessObject {
 
 		// Save it to the parser cache.
 		// Make sure the cache time matches page_touched to avoid double parsing.
-		ParserCache::singleton()->save(
+		MediaWikiServices::getInstance()->getParserCache()->save(
 			$editInfo->output, $this, $editInfo->popts,
 			$revision->getTimestamp(), $editInfo->revid
 		);
 
 		// Update the links tables and other secondary data
 		if ( $content ) {
-			$recursive = $options['changed']; // bug 50785
+			$recursive = $options['changed']; // T52785
 			$updates = $content->getSecondaryDataUpdates(
 				$this->getTitle(), null, $recursive, $editInfo->output
 			);
@@ -2319,9 +2201,12 @@ class WikiPage implements Page, IDBAccessObject {
 			}
 		}
 
-		Hooks::run( 'ArticleEditUpdates', [ &$this, &$editInfo, $options['changed'] ] );
+		// Avoid PHP 7.1 warning of passing $this by reference
+		$wikiPage = $this;
 
-		if ( Hooks::run( 'ArticleEditUpdatesDeleteFromRecentchanges', [ &$this ] ) ) {
+		Hooks::run( 'ArticleEditUpdates', [ &$wikiPage, &$editInfo, $options['changed'] ] );
+
+		if ( Hooks::run( 'ArticleEditUpdatesDeleteFromRecentchanges', [ &$wikiPage ] ) ) {
 			// Flush old entries from the `recentchanges` table
 			if ( mt_rand( 0, 9 ) == 0 ) {
 				JobQueueGroup::singleton()->lazyPush( RecentChangesUpdateJob::newPurgeJob() );
@@ -2365,9 +2250,12 @@ class WikiPage implements Page, IDBAccessObject {
 			if ( !$recipient ) {
 				wfDebug( __METHOD__ . ": invalid username\n" );
 			} else {
+				// Avoid PHP 7.1 warning of passing $this by reference
+				$wikiPage = $this;
+
 				// Allow extensions to prevent user notification
 				// when a new message is added to their talk page
-				if ( Hooks::run( 'ArticleEditUpdateNewTalk', [ &$this, $recipient ] ) ) {
+				if ( Hooks::run( 'ArticleEditUpdateNewTalk', [ &$wikiPage, $recipient ] ) ) {
 					if ( User::isIP( $shortTitle ) ) {
 						// An anonymous user
 						$recipient->setNewtalk( true, $revision );
@@ -2381,22 +2269,12 @@ class WikiPage implements Page, IDBAccessObject {
 		}
 
 		if ( $this->mTitle->getNamespace() == NS_MEDIAWIKI ) {
-			// XXX: could skip pseudo-messages like js/css here, based on content model.
-			$msgtext = $content ? $content->getWikitextForTransclusion() : null;
-			if ( $msgtext === false || $msgtext === null ) {
-				$msgtext = '';
-			}
-
-			MessageCache::singleton()->replace( $shortTitle, $msgtext );
-
-			if ( $wgContLang->hasVariants() ) {
-				$wgContLang->updateConversionTable( $this->mTitle );
-			}
+			MessageCache::singleton()->updateMessageOverride( $this->mTitle, $content );
 		}
 
 		if ( $options['created'] ) {
 			self::onArticleCreate( $this->mTitle );
-		} elseif ( $options['changed'] ) { // bug 50785
+		} elseif ( $options['changed'] ) { // T52785
 			self::onArticleEdit( $this->mTitle, $revision );
 		}
 
@@ -2422,10 +2300,10 @@ class WikiPage implements Page, IDBAccessObject {
 	public function doUpdateRestrictions( array $limit, array $expiry,
 		&$cascade, $reason, User $user, $tags = null
 	) {
-		global $wgCascadingRestrictionLevels, $wgContLang;
+		global $wgCascadingRestrictionLevels;
 
 		if ( wfReadOnly() ) {
-			return Status::newFatal( 'readonlytext', wfReadOnlyReason() );
+			return Status::newFatal( wfMessage( 'readonlytext', wfReadOnlyReason() ) );
 		}
 
 		$this->loadPageData( 'fromdbmaster' );
@@ -2485,18 +2363,15 @@ class WikiPage implements Page, IDBAccessObject {
 		}
 
 		if ( !$protect ) { // No protection at all means unprotection
-			$revCommentMsg = 'unprotectedarticle';
+			$revCommentMsg = 'unprotectedarticle-comment';
 			$logAction = 'unprotect';
 		} elseif ( $isProtected ) {
-			$revCommentMsg = 'modifiedarticleprotection';
+			$revCommentMsg = 'modifiedarticleprotection-comment';
 			$logAction = 'modify';
 		} else {
-			$revCommentMsg = 'protectedarticle';
+			$revCommentMsg = 'protectedarticle-comment';
 			$logAction = 'protect';
 		}
-
-		// Truncate for whole multibyte characters
-		$reason = $wgContLang->truncate( $reason, 255 );
 
 		$logRelationsValues = [];
 		$logRelationsField = null;
@@ -2506,7 +2381,10 @@ class WikiPage implements Page, IDBAccessObject {
 		$nullRevision = null;
 
 		if ( $id ) { // Protection of existing page
-			if ( !Hooks::run( 'ArticleProtect', [ &$this, &$user, $limit, $reason ] ) ) {
+			// Avoid PHP 7.1 warning of passing $this by reference
+			$wikiPage = $this;
+
+			if ( !Hooks::run( 'ArticleProtect', [ &$wikiPage, &$user, $limit, $reason ] ) ) {
 				return Status::newGood();
 			}
 
@@ -2566,7 +2444,6 @@ class WikiPage implements Page, IDBAccessObject {
 					$dbw->insert(
 						'page_restrictions',
 						[
-							'pr_id' => $dbw->nextSequenceValue( 'page_restrictions_pr_id_seq' ),
 							'pr_page' => $id,
 							'pr_type' => $action,
 							'pr_level' => $restrictions,
@@ -2593,14 +2470,18 @@ class WikiPage implements Page, IDBAccessObject {
 				__METHOD__
 			);
 
+			// Avoid PHP 7.1 warning of passing $this by reference
+			$wikiPage = $this;
+
 			Hooks::run( 'NewRevisionFromEditComplete',
 				[ $this, $nullRevision, $latest, $user ] );
-			Hooks::run( 'ArticleProtectComplete', [ &$this, &$user, $limit, $reason ] );
+			Hooks::run( 'ArticleProtectComplete', [ &$wikiPage, &$user, $limit, $reason ] );
 		} else { // Protection of non-existing page (also known as "title protection")
 			// Cascade protection is meaningless in this case
 			$cascade = false;
 
 			if ( $limit['create'] != '' ) {
+				$commentFields = CommentStore::newKey( 'pt_reason' )->insert( $dbw, $reason );
 				$dbw->replace( 'protected_titles',
 					[ [ 'pt_namespace', 'pt_title' ] ],
 					[
@@ -2610,8 +2491,7 @@ class WikiPage implements Page, IDBAccessObject {
 						'pt_timestamp' => $dbw->timestamp(),
 						'pt_expiry' => $dbw->encodeExpiry( $expiry['create'] ),
 						'pt_user' => $user->getId(),
-						'pt_reason' => $reason,
-					], __METHOD__
+					] + $commentFields, __METHOD__
 				);
 				$logParamsDetails[] = [
 					'type' => 'create',
@@ -2675,16 +2555,14 @@ class WikiPage implements Page, IDBAccessObject {
 	public function insertProtectNullRevision( $revCommentMsg, array $limit,
 		array $expiry, $cascade, $reason, $user = null
 	) {
-		global $wgContLang;
 		$dbw = wfGetDB( DB_MASTER );
 
 		// Prepare a null revision to be added to the history
-		$editComment = $wgContLang->ucfirst(
-			wfMessage(
-				$revCommentMsg,
-				$this->mTitle->getPrefixedText()
-			)->inContentLanguage()->text()
-		);
+		$editComment = wfMessage(
+			$revCommentMsg,
+			$this->mTitle->getPrefixedText(),
+			$user ? $user->getName() : ''
+		)->inContentLanguage()->text();
 		if ( $reason ) {
 			$editComment .= wfMessage( 'colon-separator' )->inContentLanguage()->text() . $reason;
 		}
@@ -2857,6 +2735,7 @@ class WikiPage implements Page, IDBAccessObject {
 	 * @param array|string &$error Array of errors to append to
 	 * @param User $user The deleting user
 	 * @param array $tags Tags to apply to the deletion action
+	 * @param string $logsubtype
 	 * @return Status Status object; if successful, $status->value is the log_id of the
 	 *   deletion log entry. If the page couldn't be deleted because it wasn't
 	 *   found, $status is a non-fatal 'cannotdelete' error
@@ -2865,7 +2744,7 @@ class WikiPage implements Page, IDBAccessObject {
 		$reason, $suppress = false, $u1 = null, $u2 = null, &$error = '', User $user = null,
 		$tags = [], $logsubtype = 'delete'
 	) {
-		global $wgUser, $wgContentHandlerUseDB;
+		global $wgUser, $wgContentHandlerUseDB, $wgCommentTableSchemaMigrationStage;
 
 		wfDebug( __METHOD__ . "\n" );
 
@@ -2877,9 +2756,12 @@ class WikiPage implements Page, IDBAccessObject {
 			return $status;
 		}
 
+		// Avoid PHP 7.1 warning of passing $this by reference
+		$wikiPage = $this;
+
 		$user = is_null( $user ) ? $wgUser : $user;
 		if ( !Hooks::run( 'ArticleDelete',
-			[ &$this, &$user, &$reason, &$error, &$status, $suppress ]
+			[ &$wikiPage, &$user, &$reason, &$error, &$status, $suppress ]
 		) ) {
 			if ( $status->isOK() ) {
 				// Hook aborted but didn't set a fatal status
@@ -2926,17 +2808,16 @@ class WikiPage implements Page, IDBAccessObject {
 			$content = null;
 		}
 
+		$revCommentStore = new CommentStore( 'rev_comment' );
+		$arCommentStore = new CommentStore( 'ar_comment' );
+
+		$fields = Revision::selectFields();
+		$bitfield = false;
+
 		// Bitfields to further suppress the content
 		if ( $suppress ) {
-			$bitfield = 0;
-			// This should be 15...
-			$bitfield |= Revision::DELETED_TEXT;
-			$bitfield |= Revision::DELETED_COMMENT;
-			$bitfield |= Revision::DELETED_USER;
-			$bitfield |= Revision::DELETED_RESTRICTED;
-			$deletionFields = [ $dbw->addQuotes( $bitfield ) . ' AS deleted' ];
-		} else {
-			$deletionFields = [ 'rev_deleted AS deleted' ];
+			$bitfield = Revision::SUPPRESSED_ALL;
+			$fields = array_diff( $fields, [ 'rev_deleted' ] );
 		}
 
 		// For now, shunt the revision data into the archive table.
@@ -2947,21 +2828,28 @@ class WikiPage implements Page, IDBAccessObject {
 		// the rev_deleted field, which is reserved for this purpose.
 
 		// Get all of the page revisions
-		$fields = array_diff( Revision::selectFields(), [ 'rev_deleted' ] );
+		$commentQuery = $revCommentStore->getJoin();
 		$res = $dbw->select(
-			'revision',
-			array_merge( $fields, $deletionFields ),
+			[ 'revision' ] + $commentQuery['tables'],
+			$fields + $commentQuery['fields'],
 			[ 'rev_page' => $id ],
 			__METHOD__,
-			'FOR UPDATE'
+			'FOR UPDATE',
+			$commentQuery['joins']
 		);
+
 		// Build their equivalent archive rows
 		$rowsInsert = [];
+		$revids = [];
+
+		/** @var int[] Revision IDs of edits that were made by IPs */
+		$ipRevIds = [];
+
 		foreach ( $res as $row ) {
+			$comment = $revCommentStore->getComment( $row );
 			$rowInsert = [
 				'ar_namespace'  => $namespace,
 				'ar_title'      => $dbKey,
-				'ar_comment'    => $row->rev_comment,
 				'ar_user'       => $row->rev_user,
 				'ar_user_text'  => $row->rev_user_text,
 				'ar_timestamp'  => $row->rev_timestamp,
@@ -2973,14 +2861,21 @@ class WikiPage implements Page, IDBAccessObject {
 				'ar_flags'      => '',
 				'ar_len'        => $row->rev_len,
 				'ar_page_id'    => $id,
-				'ar_deleted'    => $row->deleted,
+				'ar_deleted'    => $suppress ? $bitfield : $row->rev_deleted,
 				'ar_sha1'       => $row->rev_sha1,
-			];
+			] + $arCommentStore->insert( $dbw, $comment );
 			if ( $wgContentHandlerUseDB ) {
 				$rowInsert['ar_content_model'] = $row->rev_content_model;
 				$rowInsert['ar_content_format'] = $row->rev_content_format;
 			}
 			$rowsInsert[] = $rowInsert;
+			$revids[] = $row->rev_id;
+
+			// Keep track of IP edits, so that the corresponding rows can
+			// be deleted in the ip_changes table.
+			if ( (int)$row->rev_user === 0 && IP::isValid( $row->rev_user_text ) ) {
+				$ipRevIds[] = $row->rev_id;
+			}
 		}
 		// Copy them into the archive table
 		$dbw->insert( 'archive', $rowsInsert, __METHOD__ );
@@ -2995,6 +2890,14 @@ class WikiPage implements Page, IDBAccessObject {
 		// Now that it's safely backed up, delete it
 		$dbw->delete( 'page', [ 'page_id' => $id ], __METHOD__ );
 		$dbw->delete( 'revision', [ 'rev_page' => $id ], __METHOD__ );
+		if ( $wgCommentTableSchemaMigrationStage > MIGRATION_OLD ) {
+			$dbw->delete( 'revision_comment_temp', [ 'revcomment_rev' => $revids ], __METHOD__ );
+		}
+
+		// Also delete records from ip_changes as applicable.
+		if ( count( $ipRevIds ) > 0 ) {
+			$dbw->delete( 'ip_changes', [ 'ipc_rev_id' => $ipRevIds ], __METHOD__ );
+		}
 
 		// Log the deletion, if the page was suppressed, put it in the suppression log instead
 		$logtype = $suppress ? 'suppress' : 'delete';
@@ -3008,7 +2911,7 @@ class WikiPage implements Page, IDBAccessObject {
 
 		$dbw->onTransactionPreCommitOrIdle(
 			function () use ( $dbw, $logEntry, $logid ) {
-				// Bug 56776: avoid deadlocks (especially from FileDeleteForm)
+				// T58776: avoid deadlocks (especially from FileDeleteForm)
 				$logEntry->publish( $logid );
 			},
 			__METHOD__
@@ -3030,8 +2933,8 @@ class WikiPage implements Page, IDBAccessObject {
 		$status->value = $logid;
 
 		// Show log excerpt on 404 pages rather than just a link
-		$cache = ObjectCache::getMainStashInstance();
-		$key = wfMemcKey( 'page-recent-delete', md5( $logTitle->getPrefixedText() ) );
+		$cache = MediaWikiServices::getInstance()->getMainObjectStash();
+		$key = $cache->makeKey( 'page-recent-delete', md5( $logTitle->getPrefixedText() ) );
 		$cache->set( $key, 1, $cache::TTL_DAY );
 
 		return $status;
@@ -3040,7 +2943,7 @@ class WikiPage implements Page, IDBAccessObject {
 	/**
 	 * Lock the page row for this title+id and return page_latest (or 0)
 	 *
-	 * @return integer Returns 0 if no row was found with this title+id
+	 * @return int Returns 0 if no row was found with this title+id
 	 * @since 1.27
 	 */
 	public function lockAndGetLatest() {
@@ -3095,7 +2998,7 @@ class WikiPage implements Page, IDBAccessObject {
 		}
 
 		// Clear caches
-		WikiPage::onArticleDelete( $this->mTitle );
+		self::onArticleDelete( $this->mTitle );
 		ResourceLoaderWikiModule::invalidateModuleCache(
 			$this->mTitle, $revision, null, wfWikiID()
 		);
@@ -3122,7 +3025,7 @@ class WikiPage implements Page, IDBAccessObject {
 	 * @param string $token Rollback token.
 	 * @param bool $bot If true, mark all reverted edits as bot.
 	 *
-	 * @param array $resultDetails Array contains result-specific array of additional values
+	 * @param array &$resultDetails Array contains result-specific array of additional values
 	 *    'alreadyrolled' : 'current' (rev)
 	 *    success        : 'summary' (str), 'current' (rev), 'target' (rev)
 	 *
@@ -3174,7 +3077,7 @@ class WikiPage implements Page, IDBAccessObject {
 	 * @param string $summary Custom summary. Set to default summary if empty.
 	 * @param bool $bot If true, mark all reverted edits as bot.
 	 *
-	 * @param array $resultDetails Contains result-specific array of additional values
+	 * @param array &$resultDetails Contains result-specific array of additional values
 	 * @param User $guser The user performing the rollback
 	 * @param array|null $tags Change tags to apply to the rollback
 	 * Callers are responsible for permission checks
@@ -3259,9 +3162,6 @@ class WikiPage implements Page, IDBAccessObject {
 		// Trim spaces on user supplied text
 		$summary = trim( $summary );
 
-		// Truncate for whole multibyte characters.
-		$summary = $wgContLang->truncate( $summary, 255 );
-
 		// Save
 		$flags = EDIT_UPDATE | EDIT_INTERNAL;
 
@@ -3288,7 +3188,7 @@ class WikiPage implements Page, IDBAccessObject {
 		);
 
 		// Set patrolling and bot flag on the edits, which gets rollbacked.
-		// This is done even on edit failure to have patrolling in that case (bug 62157).
+		// This is done even on edit failure to have patrolling in that case (T64157).
 		$set = [];
 		if ( $bot && $guser->isAllowed( 'markbotedits' ) ) {
 			// Mark all reverted edits as bot
@@ -3381,6 +3281,9 @@ class WikiPage implements Page, IDBAccessObject {
 
 		MediaWikiServices::getInstance()->getLinkCache()->invalidateTitle( $title );
 
+		// Invalidate caches of articles which include this page
+		DeferredUpdates::addUpdate( new HTMLCacheUpdate( $title, 'templatelinks' ) );
+
 		if ( $title->getNamespace() == NS_CATEGORY ) {
 			// Load the Category object, which will schedule a job to create
 			// the category table row if necessary. Checking a replica DB is ok
@@ -3396,8 +3299,6 @@ class WikiPage implements Page, IDBAccessObject {
 	 * @param Title $title
 	 */
 	public static function onArticleDelete( Title $title ) {
-		global $wgContLang;
-
 		// Update existence markers on article/talk tabs...
 		$other = $title->getOtherPage();
 
@@ -3414,11 +3315,7 @@ class WikiPage implements Page, IDBAccessObject {
 
 		// Messages
 		if ( $title->getNamespace() == NS_MEDIAWIKI ) {
-			MessageCache::singleton()->replace( $title->getDBkey(), false );
-
-			if ( $wgContLang->hasVariants() ) {
-				$wgContLang->updateConversionTable( $title );
-			}
+			MessageCache::singleton()->updateMessageOverride( $title, null );
 		}
 
 		// Images
@@ -3459,7 +3356,7 @@ class WikiPage implements Page, IDBAccessObject {
 		HTMLFileCache::clearFileCache( $title );
 
 		$revid = $revision ? $revision->getId() : null;
-		DeferredUpdates::addCallableUpdate( function() use ( $title, $revid ) {
+		DeferredUpdates::addCallableUpdate( function () use ( $title, $revid ) {
 			InfoAction::invalidateCache( $title, $revid );
 		} );
 	}
@@ -3520,28 +3417,6 @@ class WikiPage implements Page, IDBAccessObject {
 	}
 
 	/**
-	 * Return an applicable autosummary if one exists for the given edit.
-	 * @param string|null $oldtext The previous text of the page.
-	 * @param string|null $newtext The submitted text of the page.
-	 * @param int $flags Bitmask: a bitmask of flags submitted for the edit.
-	 * @return string An appropriate autosummary, or an empty string.
-	 *
-	 * @deprecated since 1.21, use ContentHandler::getAutosummary() instead
-	 */
-	public static function getAutosummary( $oldtext, $newtext, $flags ) {
-		// NOTE: stub for backwards-compatibility. assumes the given text is
-		// wikitext. will break horribly if it isn't.
-
-		wfDeprecated( __METHOD__, '1.21' );
-
-		$handler = ContentHandler::getForModelID( CONTENT_MODEL_WIKITEXT );
-		$oldContent = is_null( $oldtext ) ? null : $handler->unserializeContent( $oldtext );
-		$newContent = is_null( $newtext ) ? null : $handler->unserializeContent( $newtext );
-
-		return $handler->getAutosummary( $oldContent, $newContent, $flags );
-	}
-
-	/**
 	 * Auto-generates a deletion reason
 	 *
 	 * @param bool &$hasHistory Whether the page has a history
@@ -3556,107 +3431,106 @@ class WikiPage implements Page, IDBAccessObject {
 	 * Update all the appropriate counts in the category table, given that
 	 * we've added the categories $added and deleted the categories $deleted.
 	 *
+	 * This should only be called from deferred updates or jobs to avoid contention.
+	 *
 	 * @param array $added The names of categories that were added
 	 * @param array $deleted The names of categories that were deleted
-	 * @param integer $id Page ID (this should be the original deleted page ID)
+	 * @param int $id Page ID (this should be the original deleted page ID)
 	 */
 	public function updateCategoryCounts( array $added, array $deleted, $id = 0 ) {
 		$id = $id ?: $this->getId();
+		$ns = $this->getTitle()->getNamespace();
+
+		$addFields = [ 'cat_pages = cat_pages + 1' ];
+		$removeFields = [ 'cat_pages = cat_pages - 1' ];
+		if ( $ns == NS_CATEGORY ) {
+			$addFields[] = 'cat_subcats = cat_subcats + 1';
+			$removeFields[] = 'cat_subcats = cat_subcats - 1';
+		} elseif ( $ns == NS_FILE ) {
+			$addFields[] = 'cat_files = cat_files + 1';
+			$removeFields[] = 'cat_files = cat_files - 1';
+		}
+
 		$dbw = wfGetDB( DB_MASTER );
-		$method = __METHOD__;
-		// Do this at the end of the commit to reduce lock wait timeouts
-		$dbw->onTransactionPreCommitOrIdle(
-			function () use ( $dbw, $added, $deleted, $id, $method ) {
-				$ns = $this->getTitle()->getNamespace();
 
-				$addFields = [ 'cat_pages = cat_pages + 1' ];
-				$removeFields = [ 'cat_pages = cat_pages - 1' ];
-				if ( $ns == NS_CATEGORY ) {
-					$addFields[] = 'cat_subcats = cat_subcats + 1';
-					$removeFields[] = 'cat_subcats = cat_subcats - 1';
-				} elseif ( $ns == NS_FILE ) {
-					$addFields[] = 'cat_files = cat_files + 1';
-					$removeFields[] = 'cat_files = cat_files - 1';
+		if ( count( $added ) ) {
+			$existingAdded = $dbw->selectFieldValues(
+				'category',
+				'cat_title',
+				[ 'cat_title' => $added ],
+				__METHOD__
+			);
+
+			// For category rows that already exist, do a plain
+			// UPDATE instead of INSERT...ON DUPLICATE KEY UPDATE
+			// to avoid creating gaps in the cat_id sequence.
+			if ( count( $existingAdded ) ) {
+				$dbw->update(
+					'category',
+					$addFields,
+					[ 'cat_title' => $existingAdded ],
+					__METHOD__
+				);
+			}
+
+			$missingAdded = array_diff( $added, $existingAdded );
+			if ( count( $missingAdded ) ) {
+				$insertRows = [];
+				foreach ( $missingAdded as $cat ) {
+					$insertRows[] = [
+						'cat_title'   => $cat,
+						'cat_pages'   => 1,
+						'cat_subcats' => ( $ns == NS_CATEGORY ) ? 1 : 0,
+						'cat_files'   => ( $ns == NS_FILE ) ? 1 : 0,
+					];
 				}
+				$dbw->upsert(
+					'category',
+					$insertRows,
+					[ 'cat_title' ],
+					$addFields,
+					__METHOD__
+				);
+			}
+		}
 
-				if ( count( $added ) ) {
-					$existingAdded = $dbw->selectFieldValues(
-						'category',
-						'cat_title',
-						[ 'cat_title' => $added ],
-						$method
-					);
+		if ( count( $deleted ) ) {
+			$dbw->update(
+				'category',
+				$removeFields,
+				[ 'cat_title' => $deleted ],
+				__METHOD__
+			);
+		}
 
-					// For category rows that already exist, do a plain
-					// UPDATE instead of INSERT...ON DUPLICATE KEY UPDATE
-					// to avoid creating gaps in the cat_id sequence.
-					if ( count( $existingAdded ) ) {
-						$dbw->update(
-							'category',
-							$addFields,
-							[ 'cat_title' => $existingAdded ],
-							$method
-						);
-					}
+		foreach ( $added as $catName ) {
+			$cat = Category::newFromName( $catName );
+			Hooks::run( 'CategoryAfterPageAdded', [ $cat, $this ] );
+		}
 
-					$missingAdded = array_diff( $added, $existingAdded );
-					if ( count( $missingAdded ) ) {
-						$insertRows = [];
-						foreach ( $missingAdded as $cat ) {
-							$insertRows[] = [
-								'cat_title'   => $cat,
-								'cat_pages'   => 1,
-								'cat_subcats' => ( $ns == NS_CATEGORY ) ? 1 : 0,
-								'cat_files'   => ( $ns == NS_FILE ) ? 1 : 0,
-							];
-						}
-						$dbw->upsert(
-							'category',
-							$insertRows,
-							[ 'cat_title' ],
-							$addFields,
-							$method
-						);
-					}
-				}
+		foreach ( $deleted as $catName ) {
+			$cat = Category::newFromName( $catName );
+			Hooks::run( 'CategoryAfterPageRemoved', [ $cat, $this, $id ] );
+		}
 
-				if ( count( $deleted ) ) {
-					$dbw->update(
-						'category',
-						$removeFields,
-						[ 'cat_title' => $deleted ],
-						$method
-					);
-				}
-
-				foreach ( $added as $catName ) {
-					$cat = Category::newFromName( $catName );
-					Hooks::run( 'CategoryAfterPageAdded', [ $cat, $this ] );
-				}
-
-				foreach ( $deleted as $catName ) {
-					$cat = Category::newFromName( $catName );
-					Hooks::run( 'CategoryAfterPageRemoved', [ $cat, $this, $id ] );
-				}
-
-				// Refresh counts on categories that should be empty now, to
-				// trigger possible deletion. Check master for the most
-				// up-to-date cat_pages.
-				if ( count( $deleted ) ) {
-					$rows = $dbw->select(
-						'category',
-						[ 'cat_id', 'cat_title', 'cat_pages', 'cat_subcats', 'cat_files' ],
-						[ 'cat_title' => $deleted, 'cat_pages <= 0' ],
-						$method
-					);
-					foreach ( $rows as $row ) {
-						$cat = Category::newFromRow( $row );
-						$cat->refreshCounts();
-					}
-				}
-			},
-			__METHOD__
-		);
+		// Refresh counts on categories that should be empty now, to
+		// trigger possible deletion. Check master for the most
+		// up-to-date cat_pages.
+		if ( count( $deleted ) ) {
+			$rows = $dbw->select(
+				'category',
+				[ 'cat_id', 'cat_title', 'cat_pages', 'cat_subcats', 'cat_files' ],
+				[ 'cat_title' => $deleted, 'cat_pages <= 0' ],
+				__METHOD__
+			);
+			foreach ( $rows as $row ) {
+				$cat = Category::newFromRow( $row );
+				// T166757: do the update after this DB commit
+				DeferredUpdates::addCallableUpdate( function () use ( $cat ) {
+					$cat->refreshCounts();
+				} );
+			}
+		}
 	}
 
 	/**
@@ -3752,5 +3626,42 @@ class WikiPage implements Page, IDBAccessObject {
 	 */
 	public function isLocal() {
 		return true;
+	}
+
+	/**
+	 * The display name for the site this content
+	 * come from. If a subclass overrides isLocal(),
+	 * this could return something other than the
+	 * current site name
+	 *
+	 * @since 1.28
+	 * @return string
+	 */
+	public function getWikiDisplayName() {
+		global $wgSitename;
+		return $wgSitename;
+	}
+
+	/**
+	 * Get the source URL for the content on this page,
+	 * typically the canonical URL, but may be a remote
+	 * link if the content comes from another site
+	 *
+	 * @since 1.28
+	 * @return string
+	 */
+	public function getSourceURL() {
+		return $this->getTitle()->getCanonicalURL();
+	}
+
+	/**
+	 * @param WANObjectCache $cache
+	 * @return string[]
+	 * @since 1.28
+	 */
+	public function getMutableCacheKeys( WANObjectCache $cache ) {
+		$linkCache = MediaWikiServices::getInstance()->getLinkCache();
+
+		return $linkCache->getMutableCacheKeys( $cache, $this->getTitle()->getTitleValue() );
 	}
 }

@@ -38,6 +38,7 @@ class BlockLevelPass {
 	const COLON_STATE_COMMENT = 5;
 	const COLON_STATE_COMMENTDASH = 6;
 	const COLON_STATE_COMMENTDASHDASH = 7;
+	const COLON_STATE_LC = 8;
 
 	/**
 	 * Make lists from lines starting with ':', '*', '#', etc.
@@ -256,12 +257,17 @@ class BlockLevelPass {
 					$output .= $this->nextItem( $prefix[$commonPrefixLength - 1] );
 				}
 
+				# Close an open <dt> if we have a <dd> (":") starting on this line
+				if ( $this->DTopen && $commonPrefixLength > 0 && $prefix[$commonPrefixLength - 1] === ':' ) {
+					$output .= $this->nextItem( ':' );
+				}
+
 				# Open prefixes where appropriate.
 				if ( $lastPrefix && $prefixLength > $commonPrefixLength ) {
 					$output .= "\n";
 				}
 				while ( $prefixLength > $commonPrefixLength ) {
-					$char = substr( $prefix, $commonPrefixLength, 1 );
+					$char = $prefix[$commonPrefixLength];
 					$output .= $this->openList( $char );
 
 					if ( ';' === $char ) {
@@ -285,20 +291,20 @@ class BlockLevelPass {
 				# @todo consider using a stack for nestable elements like span, table and div
 				$openMatch = preg_match(
 					'/(?:<table|<h1|<h2|<h3|<h4|<h5|<h6|<pre|<tr|'
-						. '<p|<ul|<ol|<dl|<li|<\\/tr|<\\/td|<\\/th)/iS',
+						. '<p|<ul|<ol|<dl|<li|<\\/tr|<\\/td|<\\/th)\\b/iS',
 					$t
 				);
 				$closeMatch = preg_match(
 					'/(?:<\\/table|<\\/h1|<\\/h2|<\\/h3|<\\/h4|<\\/h5|<\\/h6|'
 						. '<td|<th|<\\/?blockquote|<\\/?div|<hr|<\\/pre|<\\/p|<\\/mw:|'
 						. Parser::MARKER_PREFIX
-						. '-pre|<\\/li|<\\/ul|<\\/ol|<\\/dl|<\\/?center)/iS',
+						. '-pre|<\\/li|<\\/ul|<\\/ol|<\\/dl|<\\/?center)\\b/iS',
 					$t
 				);
 
 				if ( $openMatch || $closeMatch ) {
 					$pendingPTag = false;
-					# @todo bug 5718: paragraph closed
+					# @todo T7718: paragraph closed
 					$output .= $this->closeParagraph();
 					if ( $preOpenMatch && !$preCloseMatch ) {
 						$this->inPre = true;
@@ -352,7 +358,7 @@ class BlockLevelPass {
 					}
 				}
 			}
-			# somewhere above we forget to get out of pre block (bug 785)
+			# somewhere above we forget to get out of pre block (T2785)
 			if ( $preCloseMatch && $this->inPre ) {
 				$this->inPre = false;
 			}
@@ -389,15 +395,14 @@ class BlockLevelPass {
 	 * @return string The position of the ':', or false if none found
 	 */
 	private function findColonNoLinks( $str, &$before, &$after ) {
-		$colonPos = strpos( $str, ':' );
-		if ( $colonPos === false ) {
+		if ( !preg_match( '/:|<|-\{/', $str, $m, PREG_OFFSET_CAPTURE ) ) {
 			# Nothing to find!
 			return false;
 		}
 
-		$ltPos = strpos( $str, '<' );
-		if ( $ltPos === false || $ltPos > $colonPos ) {
+		if ( $m[0][0] === ':' ) {
 			# Easy; no tag nesting to worry about
+			$colonPos = $m[0][1];
 			$before = substr( $str, 0, $colonPos );
 			$after = substr( $str, $colonPos + 1 );
 			return $colonPos;
@@ -405,9 +410,10 @@ class BlockLevelPass {
 
 		# Ugly state machine to walk through avoiding tags.
 		$state = self::COLON_STATE_TEXT;
-		$level = 0;
+		$ltLevel = 0;
+		$lcLevel = 0;
 		$len = strlen( $str );
-		for ( $i = 0; $i < $len; $i++ ) {
+		for ( $i = $m[0][1]; $i < $len; $i++ ) {
 			$c = $str[$i];
 
 			switch ( $state ) {
@@ -418,7 +424,7 @@ class BlockLevelPass {
 					$state = self::COLON_STATE_TAGSTART;
 					break;
 				case ":":
-					if ( $level === 0 ) {
+					if ( $ltLevel === 0 ) {
 						# We found it!
 						$before = substr( $str, 0, $i );
 						$after = substr( $str, $i + 1 );
@@ -428,35 +434,44 @@ class BlockLevelPass {
 					break;
 				default:
 					# Skip ahead looking for something interesting
-					$colonPos = strpos( $str, ':', $i );
-					if ( $colonPos === false ) {
+					if ( !preg_match( '/:|<|-\{/', $str, $m, PREG_OFFSET_CAPTURE, $i ) ) {
 						# Nothing else interesting
 						return false;
 					}
-					$ltPos = strpos( $str, '<', $i );
-					if ( $level === 0 ) {
-						if ( $ltPos === false || $colonPos < $ltPos ) {
-							# We found it!
-							$before = substr( $str, 0, $colonPos );
-							$after = substr( $str, $colonPos + 1 );
-							return $i;
-						}
+					if ( $m[0][0] === '-{' ) {
+						$state = self::COLON_STATE_LC;
+						$lcLevel++;
+						$i = $m[0][1] + 1;
+					} else {
+						# Skip ahead to next interesting character.
+						$i = $m[0][1] - 1;
 					}
-					if ( $ltPos === false ) {
-						# Nothing else interesting to find; abort!
-						# We're nested, but there's no close tags left. Abort!
-						break 2;
+					break;
+				}
+				break;
+			case self::COLON_STATE_LC:
+				# In language converter markup -{ ... }-
+				if ( !preg_match( '/-\{|\}-/', $str, $m, PREG_OFFSET_CAPTURE, $i ) ) {
+					# Nothing else interesting to find; abort!
+					# We're nested in language converter markup, but there
+					# are no close tags left.  Abort!
+					break 2;
+				} elseif ( $m[0][0] === '-{' ) {
+					$i = $m[0][1] + 1;
+					$lcLevel++;
+				} elseif ( $m[0][0] === '}-' ) {
+					$i = $m[0][1] + 1;
+					$lcLevel--;
+					if ( $lcLevel === 0 ) {
+						$state = self::COLON_STATE_TEXT;
 					}
-					# Skip ahead to next tag start
-					$i = $ltPos;
-					$state = self::COLON_STATE_TAGSTART;
 				}
 				break;
 			case self::COLON_STATE_TAG:
 				# In a <tag>
 				switch ( $c ) {
 				case ">":
-					$level++;
+					$ltLevel++;
 					$state = self::COLON_STATE_TEXT;
 					break;
 				case "/":
@@ -486,10 +501,12 @@ class BlockLevelPass {
 			case self::COLON_STATE_CLOSETAG:
 				# In a </tag>
 				if ( $c === ">" ) {
-					$level--;
-					if ( $level < 0 ) {
+					if ( $ltLevel > 0 ) {
+						$ltLevel--;
+					} else {
+						# ignore the excess close tag, but keep looking for
+						# colons. (This matches Parsoid behavior.)
 						wfDebug( __METHOD__ . ": Invalid input; too many close tags\n" );
-						return false;
 					}
 					$state = self::COLON_STATE_TEXT;
 				}
@@ -526,8 +543,11 @@ class BlockLevelPass {
 				throw new MWException( "State machine error in " . __METHOD__ );
 			}
 		}
-		if ( $level > 0 ) {
-			wfDebug( __METHOD__ . ": Invalid input; not enough close tags (level $level, state $state)\n" );
+		if ( $ltLevel > 0 || $lcLevel > 0 ) {
+			wfDebug(
+				__METHOD__ . ": Invalid input; not enough close tags " .
+				"(level $ltLevel/$lcLevel, state $state)\n"
+			);
 			return false;
 		}
 		return false;

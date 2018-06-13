@@ -18,8 +18,11 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @author Aaron Schulz
  */
+use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\DBConnRef;
+use Wikimedia\Rdbms\DBConnectionError;
+use Wikimedia\Rdbms\DBError;
 use MediaWiki\MediaWikiServices;
 use Wikimedia\ScopedCallback;
 
@@ -69,7 +72,7 @@ class JobQueueDB extends JobQueue {
 	 * @return bool
 	 */
 	protected function doIsEmpty() {
-		$dbr = $this->getSlaveDB();
+		$dbr = $this->getReplicaDB();
 		try {
 			$found = $dbr->selectField( // unclaimed job
 				'job', '1', [ 'job_cmd' => $this->type, 'job_token' => '' ], __METHOD__
@@ -94,7 +97,7 @@ class JobQueueDB extends JobQueue {
 		}
 
 		try {
-			$dbr = $this->getSlaveDB();
+			$dbr = $this->getReplicaDB();
 			$size = (int)$dbr->selectField( 'job', 'COUNT(*)',
 				[ 'job_cmd' => $this->type, 'job_token' => '' ],
 				__METHOD__
@@ -123,7 +126,7 @@ class JobQueueDB extends JobQueue {
 			return $count;
 		}
 
-		$dbr = $this->getSlaveDB();
+		$dbr = $this->getReplicaDB();
 		try {
 			$count = (int)$dbr->selectField( 'job', 'COUNT(*)',
 				[ 'job_cmd' => $this->type, "job_token != {$dbr->addQuotes( '' )}" ],
@@ -154,7 +157,7 @@ class JobQueueDB extends JobQueue {
 			return $count;
 		}
 
-		$dbr = $this->getSlaveDB();
+		$dbr = $this->getReplicaDB();
 		try {
 			$count = (int)$dbr->selectField( 'job', 'COUNT(*)',
 				[
@@ -182,13 +185,21 @@ class JobQueueDB extends JobQueue {
 	 */
 	protected function doBatchPush( array $jobs, $flags ) {
 		$dbw = $this->getMasterDB();
-
-		$method = __METHOD__;
-		$dbw->onTransactionIdle(
-			function () use ( $dbw, $jobs, $flags, $method ) {
-				$this->doBatchPushInternal( $dbw, $jobs, $flags, $method );
+		// In general, there will be two cases here:
+		// a) sqlite; DB connection is probably a regular round-aware handle.
+		// If the connection is busy with a transaction, then defer the job writes
+		// until right before the main round commit step. Any errors that bubble
+		// up will rollback the main commit round.
+		// b) mysql/postgres; DB connection is generally a separate CONN_TRX_AUTO handle.
+		// No transaction is active nor will be started by writes, so enqueue the jobs
+		// now so that any errors will show up immediately as the interface expects. Any
+		// errors that bubble up will rollback the main commit round.
+		$fname = __METHOD__;
+		$dbw->onTransactionPreCommitOrIdle(
+			function () use ( $dbw, $jobs, $flags, $fname ) {
+				$this->doBatchPushInternal( $dbw, $jobs, $flags, $fname );
 			},
-			__METHOD__
+			$fname
 		);
 	}
 
@@ -324,7 +335,7 @@ class JobQueueDB extends JobQueue {
 		$invertedDirection = false; // whether one job_random direction was already scanned
 		// This uses a replication safe method for acquiring jobs. One could use UPDATE+LIMIT
 		// instead, but that either uses ORDER BY (in which case it deadlocks in MySQL) or is
-		// not replication safe. Due to http://bugs.mysql.com/bug.php?id=6980, subqueries cannot
+		// not replication safe. Due to https://bugs.mysql.com/bug.php?id=6980, subqueries cannot
 		// be used here with MySQL.
 		do {
 			if ( $tinyQueue ) { // queue has <= MAX_OFFSET rows
@@ -346,7 +357,7 @@ class JobQueueDB extends JobQueue {
 					continue; // try the other direction
 				}
 			} else { // table *may* have >= MAX_OFFSET rows
-				// Bug 42614: "ORDER BY job_random" with a job_random inequality causes high CPU
+				// T44614: "ORDER BY job_random" with a job_random inequality causes high CPU
 				// in MySQL if there are many rows for some reason. This uses a small OFFSET
 				// instead of job_random for reducing excess claim retries.
 				$row = $dbw->selectRow( 'job', self::selectFields(), // find a random job
@@ -398,7 +409,7 @@ class JobQueueDB extends JobQueue {
 		$row = false; // the row acquired
 		do {
 			if ( $dbw->getType() === 'mysql' ) {
-				// Per http://bugs.mysql.com/bug.php?id=6980, we can't use subqueries on the
+				// Per https://bugs.mysql.com/bug.php?id=6980, we can't use subqueries on the
 				// same table being changed in an UPDATE query in MySQL (gives Error: 1093).
 				// Oracle and Postgre have no such limitation. However, MySQL offers an
 				// alternative here by supporting ORDER BY + LIMIT for UPDATE queries.
@@ -566,7 +577,7 @@ class JobQueueDB extends JobQueue {
 	 * @return Iterator
 	 */
 	protected function getJobIterator( array $conds ) {
-		$dbr = $this->getSlaveDB();
+		$dbr = $this->getReplicaDB();
 		try {
 			return new MappedIterator(
 				$dbr->select( 'job', self::selectFields(), $conds ),
@@ -594,7 +605,7 @@ class JobQueueDB extends JobQueue {
 	}
 
 	protected function doGetSiblingQueuesWithJobs( array $types ) {
-		$dbr = $this->getSlaveDB();
+		$dbr = $this->getReplicaDB();
 		// @note: this does not check whether the jobs are claimed or not.
 		// This is useful so JobQueueGroup::pop() also sees queues that only
 		// have stale jobs. This lets recycleAndDeleteStaleJobs() re-enqueue
@@ -611,7 +622,7 @@ class JobQueueDB extends JobQueue {
 	}
 
 	protected function doGetSiblingQueueSizes( array $types ) {
-		$dbr = $this->getSlaveDB();
+		$dbr = $this->getReplicaDB();
 		$res = $dbr->select( 'job', [ 'job_cmd', 'COUNT(*) AS count' ],
 			[ 'job_cmd' => $types ], __METHOD__, [ 'GROUP BY' => 'job_cmd' ] );
 
@@ -723,7 +734,6 @@ class JobQueueDB extends JobQueue {
 			'job_title' => $job->getTitle()->getDBkey(),
 			'job_params' => self::makeBlob( $job->getParams() ),
 			// Additional job metadata
-			'job_id' => $dbw->nextSequenceValue( 'job_job_id_seq' ),
 			'job_timestamp' => $dbw->timestamp(),
 			'job_sha1' => Wikimedia\base_convert(
 				sha1( serialize( $job->getDeduplicationInfo() ) ),
@@ -737,7 +747,7 @@ class JobQueueDB extends JobQueue {
 	 * @throws JobQueueConnectionError
 	 * @return DBConnRef
 	 */
-	protected function getSlaveDB() {
+	protected function getReplicaDB() {
 		try {
 			return $this->getDB( DB_REPLICA );
 		} catch ( DBConnectionError $e ) {
@@ -764,10 +774,15 @@ class JobQueueDB extends JobQueue {
 	protected function getDB( $index ) {
 		$lbFactory = MediaWikiServices::getInstance()->getDBLoadBalancerFactory();
 		$lb = ( $this->cluster !== false )
-			? $lbFactory->getExternalLB( $this->cluster, $this->wiki )
+			? $lbFactory->getExternalLB( $this->cluster )
 			: $lbFactory->getMainLB( $this->wiki );
 
-		return $lb->getConnectionRef( $index, [], $this->wiki );
+		return ( $lb->getServerType( $lb->getWriterIndex() ) !== 'sqlite' )
+			// Keep a separate connection to avoid contention and deadlocks;
+			// However, SQLite has the opposite behavior due to DB-level locking.
+			? $lb->getConnectionRef( $index, [], $this->wiki, $lb::CONN_TRX_AUTO )
+			// Jobs insertion will be defered until the PRESEND stage to reduce contention.
+			: $lb->getConnectionRef( $index, [], $this->wiki );
 	}
 
 	/**

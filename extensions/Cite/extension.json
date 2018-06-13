@@ -44,7 +44,8 @@
 		],
 		"ResourceLoaderGetConfigVars": [
 			"CiteHooks::onResourceLoaderGetConfigVars"
-		]
+		],
+		"APIQuerySiteInfoGeneralInfo": "CiteHooks::onAPIQuerySiteInfoGeneralInfo"
 	},
 	"ResourceModules": {
 		"ext.cite.styles": {
@@ -54,7 +55,14 @@
 					"media": "print"
 				}
 			},
-			"position": "bottom"
+			"skinStyles": {
+				"minerva": "ext.cite.styles.minerva.less"
+			},
+			"position": "bottom",
+			"targets": [
+				"desktop",
+				"mobile"
+			]
 		},
 		"ext.cite.a11y": {
 			"scripts": "ext.cite.a11y.js",
@@ -86,11 +94,11 @@
 		"cite": "GlobalVarConfig::newInstance"
 	},
 	"config": {
-		"AllowCiteGroups": true,
 		"CiteCacheReferences": false,
 		"CiteStoreReferencesData": false,
 		"CiteCacheReferencesDataOnParse": false,
-		"CiteVisualEditorOtherGroup": false
+		"CiteVisualEditorOtherGroup": false,
+		"CiteResponsiveReferences": true
 	},
 	"AutoloadClasses": {
 		"ApiQueryReferences": "includes/ApiQueryReferences.php",
@@ -99,11 +107,11 @@
 		"CiteDataModule": "includes/CiteDataModule.php",
 		"CiteCSSFileModule": "includes/CiteCSSFileModule.php"
 	},
-	"ParserTestFiles": [
-		"tests/parser/citeParserTests.txt"
-	],
 	"TrackingCategories": [
 		"cite-tracking-category-cite-error"
 	],
+	"CodeMirrorTagModes": {
+		"ref": "text/mediawiki"
+	},
 	"manifest_version": 1
 }

@@ -24,6 +24,7 @@
  * @ingroup Database
  */
 use MediaWiki\MediaWikiServices;
+use Wikimedia\Rdbms\IMaintainableDatabase;
 
 class CloneDatabase {
 	/** @var string Table prefix for cloning */
@@ -41,19 +42,17 @@ class CloneDatabase {
 	/** @var bool Whether to use temporary tables or not */
 	private $useTemporaryTables = true;
 
-	/** @var Database */
+	/** @var IMaintainableDatabase */
 	private $db;
 
 	/**
-	 * Constructor
-	 *
-	 * @param Database $db A database subclass
+	 * @param IMaintainableDatabase $db A database subclass
 	 * @param array $tablesToClone An array of tables to clone, unprefixed
 	 * @param string $newTablePrefix Prefix to assign to the tables
 	 * @param string $oldTablePrefix Prefix on current tables, if not $wgDBprefix
 	 * @param bool $dropCurrentTables
 	 */
-	public function __construct( Database $db, array $tablesToClone,
+	public function __construct( IMaintainableDatabase $db, array $tablesToClone,
 		$newTablePrefix, $oldTablePrefix = '', $dropCurrentTables = true
 	) {
 		$this->db = $db;
@@ -79,7 +78,7 @@ class CloneDatabase {
 		foreach ( $this->tablesToClone as $tbl ) {
 			if ( $wgSharedDB && in_array( $tbl, $wgSharedTables, true ) ) {
 				// Shared tables don't work properly when cloning due to
-				// how prefixes are handled (bug 65654)
+				// how prefixes are handled (T67654)
 				throw new RuntimeException( "Cannot clone shared table $tbl." );
 			}
 			# Clean up from previous aborted run.  So that table escaping
@@ -92,8 +91,10 @@ class CloneDatabase {
 			self::changePrefix( $this->newTablePrefix );
 			$newTableName = $this->db->tableName( $tbl, 'raw' );
 
+			// Postgres: Temp tables are automatically deleted upon end of session
+			//           Same Temp table name hides existing table for current session
 			if ( $this->dropCurrentTables
-				&& !in_array( $this->db->getType(), [ 'postgres', 'oracle' ] )
+				&& !in_array( $this->db->getType(), [ 'oracle' ] )
 			) {
 				if ( $oldTableName === $newTableName ) {
 					// Last ditch check to avoid data loss
@@ -107,7 +108,8 @@ class CloneDatabase {
 
 			# Create new table
 			wfDebug( __METHOD__ . " duplicating $oldTableName to $newTableName\n" );
-			$this->db->duplicateTableStructure( $oldTableName, $newTableName, $this->useTemporaryTables );
+			$this->db->duplicateTableStructure(
+				$oldTableName, $newTableName, $this->useTemporaryTables );
 		}
 	}
 

@@ -53,7 +53,7 @@ class EditPageTest extends MediaWikiLangTestCase {
 				false
 			],
 			[
-				"An initial section with a fake heder (bug 32617)\n\n== Test == ??\nwtf",
+				"An initial section with a fake heder (T34617)\n\n== Test == ??\nwtf",
 				false
 			],
 			[
@@ -61,7 +61,7 @@ class EditPageTest extends MediaWikiLangTestCase {
 				"Section"
 			],
 			[
-				"== Section== \t\r\n followed by whitespace (bug 35051)",
+				"== Section== \t\r\n followed by whitespace (T37051)",
 				'Section',
 			],
 		];
@@ -163,6 +163,10 @@ class EditPageTest extends MediaWikiLangTestCase {
 
 		if ( !isset( $edit['wpStarttime'] ) ) {
 			$edit['wpStarttime'] = wfTimestampNow();
+		}
+
+		if ( !isset( $edit['wpUnicodeCheck'] ) ) {
+			$edit['wpUnicodeCheck'] = EditPage::UNICODE_CHECK;
 		}
 
 		$req = new FauxRequest( $edit, true ); // session ??
@@ -697,7 +701,8 @@ hello
 			'wpTextbox1' => serialize( 'non-text content' ),
 			'wpEditToken' => $user->getEditToken(),
 			'wpEdittime' => '',
-			'wpStarttime' => wfTimestampNow()
+			'wpStarttime' => wfTimestampNow(),
+			'wpUnicodeCheck' => EditPage::UNICODE_CHECK,
 		];
 
 		$req = new FauxRequest( $edit, true );

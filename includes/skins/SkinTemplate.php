@@ -61,7 +61,7 @@ class SkinTemplate extends Skin {
 	 *
 	 * @param OutputPage $out
 	 */
-	function setupSkinUserCss( OutputPage $out ) {
+	public function setupSkinUserCss( OutputPage $out ) {
 		$moduleStyles = [
 			'mediawiki.legacy.shared',
 			'mediawiki.legacy.commonPrint',
@@ -196,7 +196,6 @@ class SkinTemplate extends Skin {
 	}
 
 	protected function setupTemplateForOutput() {
-
 		$request = $this->getRequest();
 		$user = $this->getUser();
 		$title = $this->getTitle();
@@ -257,7 +256,6 @@ class SkinTemplate extends Skin {
 		if ( $oldContext ) {
 			$this->setContext( $oldContext );
 		}
-
 	}
 
 	/**
@@ -271,11 +269,13 @@ class SkinTemplate extends Skin {
 		# An ID that includes the actual body text; without categories, contentSub, ...
 		$realBodyAttribs = [ 'id' => 'mw-content-text' ];
 
-		# Add a mw-content-ltr/rtl class to be able to style based on text direction
-		# when the content is different from the UI language, i.e.:
-		# not for special pages or file pages AND only when viewing
-		if ( !in_array( $title->getNamespace(), [ NS_SPECIAL, NS_FILE ] ) &&
-			Action::getActionName( $this ) === 'view' ) {
+		# Add a mw-content-ltr/rtl class to be able to style based on text
+		# direction when the content is different from the UI language (only
+		# when viewing)
+		# Most information on special pages and file pages is in user language,
+		# rather than content language, so those will not get this
+		if ( Action::getActionName( $this ) === 'view' &&
+			( !$title->inNamespaces( NS_SPECIAL, NS_FILE ) || $title->isRedirect() ) ) {
 			$pageLang = $title->getPageViewLanguage();
 			$realBodyAttribs['lang'] = $pageLang->getHtmlCode();
 			$realBodyAttribs['dir'] = $pageLang->getDir();
@@ -306,8 +306,8 @@ class SkinTemplate extends Skin {
 		$tpl->set( 'pagetitle', $out->getHTMLTitle() );
 		$tpl->set( 'displaytitle', $out->mPageLinkTitle );
 
-		$tpl->setRef( 'thispage', $this->thispage );
-		$tpl->setRef( 'titleprefixeddbkey', $this->thispage );
+		$tpl->set( 'thispage', $this->thispage );
+		$tpl->set( 'titleprefixeddbkey', $this->thispage );
 		$tpl->set( 'titletext', $title->getText() );
 		$tpl->set( 'articleid', $title->getArticleID() );
 
@@ -336,32 +336,32 @@ class SkinTemplate extends Skin {
 					'href' => $link
 				];
 			}
-			$tpl->setRef( 'feeds', $feeds );
+			$tpl->set( 'feeds', $feeds );
 		} else {
 			$tpl->set( 'feeds', false );
 		}
 
-		$tpl->setRef( 'mimetype', $wgMimeType );
-		$tpl->setRef( 'jsmimetype', $wgJsMimeType );
+		$tpl->set( 'mimetype', $wgMimeType );
+		$tpl->set( 'jsmimetype', $wgJsMimeType );
 		$tpl->set( 'charset', 'UTF-8' );
-		$tpl->setRef( 'wgScript', $wgScript );
-		$tpl->setRef( 'skinname', $this->skinname );
-		$tpl->set( 'skinclass', get_class( $this ) );
-		$tpl->setRef( 'skin', $this );
-		$tpl->setRef( 'stylename', $this->stylename );
+		$tpl->set( 'wgScript', $wgScript );
+		$tpl->set( 'skinname', $this->skinname );
+		$tpl->set( 'skinclass', static::class );
+		$tpl->set( 'skin', $this );
+		$tpl->set( 'stylename', $this->stylename );
 		$tpl->set( 'printable', $out->isPrintable() );
 		$tpl->set( 'handheld', $request->getBool( 'handheld' ) );
-		$tpl->setRef( 'loggedin', $this->loggedin );
+		$tpl->set( 'loggedin', $this->loggedin );
 		$tpl->set( 'notspecialpage', !$title->isSpecialPage() );
 		$tpl->set( 'searchaction', $this->escapeSearchLink() );
 		$tpl->set( 'searchtitle', SpecialPage::getTitleFor( 'Search' )->getPrefixedDBkey() );
 		$tpl->set( 'search', trim( $request->getVal( 'search' ) ) );
-		$tpl->setRef( 'stylepath', $wgStylePath );
-		$tpl->setRef( 'articlepath', $wgArticlePath );
-		$tpl->setRef( 'scriptpath', $wgScriptPath );
-		$tpl->setRef( 'serverurl', $wgServer );
-		$tpl->setRef( 'logopath', $wgLogo );
-		$tpl->setRef( 'sitename', $wgSitename );
+		$tpl->set( 'stylepath', $wgStylePath );
+		$tpl->set( 'articlepath', $wgArticlePath );
+		$tpl->set( 'scriptpath', $wgScriptPath );
+		$tpl->set( 'serverurl', $wgServer );
+		$tpl->set( 'logopath', $wgLogo );
+		$tpl->set( 'sitename', $wgSitename );
 
 		$userLang = $this->getLanguage();
 		$userLangCode = $userLang->getHtmlCode();
@@ -374,8 +374,8 @@ class SkinTemplate extends Skin {
 		$tpl->set( 'capitalizeallnouns', $userLang->capitalizeAllNouns() ? ' capitalize-all-nouns' : '' );
 		$tpl->set( 'showjumplinks', true ); // showjumplinks preference has been removed
 		$tpl->set( 'username', $this->loggedin ? $this->username : null );
-		$tpl->setRef( 'userpage', $this->userpage );
-		$tpl->setRef( 'userpageurl', $this->userpageUrlDetails['href'] );
+		$tpl->set( 'userpage', $this->userpage );
+		$tpl->set( 'userpageurl', $this->userpageUrlDetails['href'] );
 		$tpl->set( 'userlang', $userLangCode );
 
 		// Users can have their language set differently than the
@@ -462,11 +462,11 @@ class SkinTemplate extends Skin {
 		$tpl->set( 'printfooter', $this->printSource() );
 		// Wrap the bodyText with #mw-content-text element
 		$out->mBodytext = $this->wrapHTML( $title, $out->mBodytext );
-		$tpl->setRef( 'bodytext', $out->mBodytext );
+		$tpl->set( 'bodytext', $out->mBodytext );
 
 		$language_urls = $this->getLanguages();
 		if ( count( $language_urls ) ) {
-			$tpl->setRef( 'language_urls', $language_urls );
+			$tpl->set( 'language_urls', $language_urls );
 		} else {
 			$tpl->set( 'language_urls', false );
 		}
@@ -475,8 +475,8 @@ class SkinTemplate extends Skin {
 		$tpl->set( 'personal_urls', $this->buildPersonalUrls() );
 		$content_navigation = $this->buildContentNavigationUrls();
 		$content_actions = $this->buildContentActionUrls( $content_navigation );
-		$tpl->setRef( 'content_navigation', $content_navigation );
-		$tpl->setRef( 'content_actions', $content_actions );
+		$tpl->set( 'content_navigation', $content_navigation );
+		$tpl->set( 'content_actions', $content_actions );
 
 		$tpl->set( 'sidebar', $this->buildSidebar() );
 		$tpl->set( 'nav_urls', $this->buildNavUrls() );
@@ -584,7 +584,7 @@ class SkinTemplate extends Skin {
 		/* set up the default links for the personal toolbar */
 		$personal_urls = [];
 
-		# Due to bug 32276, if a user does not have read permissions,
+		# Due to T34276, if a user does not have read permissions,
 		# $this->getTitle() will just give Special:Badtitle, which is
 		# not especially useful as a returnto parameter. Use the title
 		# from the request instead, if there was one.
@@ -665,7 +665,7 @@ class SkinTemplate extends Skin {
 					'text' => $this->msg( 'pt-userlogout' )->text(),
 					'href' => self::makeSpecialUrl( 'Userlogout',
 						// userlogout link must always contain an & character, otherwise we might not be able
-						// to detect a buggy precaching proxy (bug 17790)
+						// to detect a buggy precaching proxy (T19790)
 						$title->isSpecial( 'Preferences' ) ? 'noreturnto' : $returnto ),
 					'active' => false
 				];
@@ -722,7 +722,10 @@ class SkinTemplate extends Skin {
 			}
 
 			if ( $authManager->canAuthenticateNow() ) {
-				$personal_urls['login'] = $login_url;
+				$key = User::groupHasPermission( '*', 'read' )
+					? 'login'
+					: 'login-private';
+				$personal_urls[$key] = $login_url;
 			}
 		}
 
@@ -808,6 +811,9 @@ class SkinTemplate extends Skin {
 
 	/**
 	 * @todo is this even used?
+	 * @param string $name
+	 * @param string $urlaction
+	 * @return array
 	 */
 	function makeArticleUrlDetails( $name, $urlaction = '' ) {
 		$title = Title::newFromText( $name );
@@ -927,19 +933,18 @@ class SkinTemplate extends Skin {
 					$content_navigation['views']['view']['redundant'] = true;
 				}
 
-				$isForeignFile = $title->inNamespace( NS_FILE ) && $this->canUseWikiPage() &&
-					$this->getWikiPage() instanceof WikiFilePage && !$this->getWikiPage()->isLocal();
+				$page = $this->canUseWikiPage() ? $this->getWikiPage() : false;
+				$isRemoteContent = $page && !$page->isLocal();
 
 				// If it is a non-local file, show a link to the file in its own repository
 				// @todo abstract this for remote content that isn't a file
-				if ( $isForeignFile ) {
-					$file = $this->getWikiPage()->getFile();
+				if ( $isRemoteContent ) {
 					$content_navigation['views']['view-foreign'] = [
 						'class' => '',
 						'text' => wfMessageFallback( "$skname-view-foreign", 'view-foreign' )->
 							setContext( $this->getContext() )->
-							params( $file->getRepo()->getDisplayName() )->text(),
-						'href' => $file->getDescriptionUrl(),
+							params( $page->getWikiDisplayName() )->text(),
+						'href' => $page->getSourceURL(),
 						'primary' => false,
 					];
 				}
@@ -963,9 +968,9 @@ class SkinTemplate extends Skin {
 							&& $title->getDefaultMessageText() !== false
 						)
 					) {
-						$msgKey = $isForeignFile ? 'edit-local' : 'edit';
+						$msgKey = $isRemoteContent ? 'edit-local' : 'edit';
 					} else {
-						$msgKey = $isForeignFile ? 'create-local' : 'create';
+						$msgKey = $isRemoteContent ? 'create-local' : 'create';
 					}
 					$content_navigation['views']['edit'] = [
 						'class' => ( $isEditing && ( $section !== 'new' || !$showNewSection )
@@ -975,7 +980,7 @@ class SkinTemplate extends Skin {
 						'text' => wfMessageFallback( "$skname-view-$msgKey", $msgKey )
 							->setContext( $this->getContext() )->text(),
 						'href' => $title->getLocalURL( $this->editUrlOptions() ),
-						'primary' => !$isForeignFile, // don't collapse this in vector
+						'primary' => !$isRemoteContent, // don't collapse this in vector
 					];
 
 					// section link
@@ -1078,7 +1083,12 @@ class SkinTemplate extends Skin {
 						),
 						// uses 'watch' or 'unwatch' message
 						'text' => $this->msg( $mode )->text(),
-						'href' => $title->getLocalURL( [ 'action' => $mode ] )
+						'href' => $title->getLocalURL( [ 'action' => $mode ] ),
+						// Set a data-mw=interface attribute, which the mediawiki.page.ajax
+						// module will look for to make sure it's a trusted link
+						'data' => [
+							'mw' => 'interface',
+						],
 					];
 				}
 			}
@@ -1123,7 +1133,7 @@ class SkinTemplate extends Skin {
 			$content_navigation['namespaces']['special'] = [
 				'class' => 'selected',
 				'text' => $this->msg( 'nstab-special' )->text(),
-				'href' => $request->getRequestURL(), // @see: bug 2457, bug 2510
+				'href' => $request->getRequestURL(), // @see: T4457, T4510
 				'context' => 'subject'
 			];
 
@@ -1183,7 +1193,6 @@ class SkinTemplate extends Skin {
 	 * @return array
 	 */
 	private function buildContentActionUrls( $content_navigation ) {
-
 		// content_actions has been replaced with content_navigation for backwards
 		// compatibility and also for skins that just want simple tabs content_actions
 		// is now built by flattening the content_navigation arrays into one
@@ -1287,7 +1296,7 @@ class SkinTemplate extends Skin {
 				'href' => $this->getTitle()->getLocalURL( "action=info" )
 			];
 
-			if ( $this->getTitle()->exists() ) {
+			if ( $this->getTitle()->exists() || $this->getTitle()->inNamespace( NS_CATEGORY ) ) {
 				$nav_urls['recentchangeslinked'] = [
 					'href' => SpecialPage::getTitleFor( 'Recentchangeslinked', $this->thispage )->getLocalURL()
 				];
@@ -1326,12 +1335,14 @@ class SkinTemplate extends Skin {
 			if ( !$user->isAnon() ) {
 				$sur = new UserrightsPage;
 				$sur->setContext( $this->getContext() );
-				if ( $sur->userCanExecute( $this->getUser() ) ) {
-					$nav_urls['userrights'] = [
-						'text' => $this->msg( 'tool-link-userrights', $this->getUser()->getName() )->text(),
-						'href' => self::makeSpecialUrlSubpage( 'Userrights', $rootUser )
-					];
-				}
+				$canChange = $sur->userCanChangeRights( $user );
+				$nav_urls['userrights'] = [
+					'text' => $this->msg(
+						$canChange ? 'tool-link-userrights' : 'tool-link-userrights-readonly',
+						$rootUser
+					)->text(),
+					'href' => self::makeSpecialUrlSubpage( 'Userrights', $rootUser )
+				];
 			}
 		}
 

@@ -8,7 +8,8 @@
 			"Matěj Grabovský",
 			"Paxt",
 			"Matěj Suchánek",
-			"LordMsz"
+			"LordMsz",
+			"Seb35"
 		]
 	},
 	"config-desc": "Instalační program pro MediaWiki",
@@ -57,7 +58,7 @@
 	"config-unicode-using-intl": "Pro normalizaci Unicode se používá [http://pecl.php.net/intl PECL rozšíření intl].",
 	"config-unicode-pure-php-warning": "<strong>Upozornění:</strong> Není dostupné [http://pecl.php.net/intl PECL rozšíření intl] pro normalizaci Unicode, bude se využívat pomalá implementace v čistém PHP.\nPokud provozujete wiki s velkou návštěvností, měli byste si přečíst něco o [https://www.mediawiki.org/wiki/Special:MyLanguage/Unicode_normalization_considerations normalizaci Unicode].",
 	"config-unicode-update-warning": "<strong>Upozornění:</strong> Nainstalovaná verze vrstvy pro normalizaci Unicode používá starší verzi knihovny [http://site.icu-project.org/ projektu ICU].\nPokud vám aspoň trochu záleží na používání Unicode, měli byste [https://www.mediawiki.org/wiki/Special:MyLanguage/Unicode_normalization_considerations ji aktualizovat].",
-	"config-no-db": "Nepodařilo se nalézt vhodný databázový ovladač! Musíte nainstalovat databázový ovladač pro PHP.\n{{PLURAL:$2|Je podporován následující typ databáze|Jsou podporovány následující typy databází}}: $1.\n\nPokud jste si PHP přeložili sami, překonfigurujte ho se zapnutým databázovým klientem, například pomocí <code>./configure --with-mysql</code>.\nPokud jste PHP nainstalovali z balíčku Debian či Ubuntu, potřebujete nainstalovat také modul <code>php5-mysql</code>.",
+	"config-no-db": "Nepodařilo se nalézt vhodný databázový ovladač! Musíte nainstalovat databázový ovladač pro PHP.\n{{PLURAL:$2|Je podporován následující typ databáze|Jsou podporovány následující typy databází}}: $1.\n\nPokud jste si PHP přeložili sami, překonfigurujte ho se zapnutým databázovým klientem, například pomocí <code>./configure --with-mysqli</code>.\nPokud jste PHP nainstalovali z balíčku Debian či Ubuntu, potřebujete nainstalovat také modul <code>php5-mysql</code>.",
 	"config-outdated-sqlite": "<strong>Upozornění:</strong> Máte SQLite $1, které je starší než minimálně vyžadovaná verze $2. SQLite nebude dostupné.",
 	"config-no-fts3": "<strong>Upozornění:</strong> SQLite bylo přeloženo bez [//sqlite.org/fts3.html modulu FTS3], funkce pro vyhledávání zde nebudou dostupné.",
 	"config-pcre-old": "<strong>Kritická chyba:</strong> Je vyžadováno PCRE verze $1 nebo novější.\nVaše binárka PHP obsahuje PCRE $2.\n[https://www.mediawiki.org/wiki/Manual:Errors_and_symptoms/PCRE Více informací.]",
@@ -84,6 +85,7 @@
 	"config-no-cli-uploads-check": "<strong>Upozornění:</strong> Váš výchozí adresář pro načítané soubory (<code>$1</code>) se při instalaci z příkazového řádku nekontroluje na bezpečnostní hrozbu provádění libovolných skriptů.",
 	"config-brokenlibxml": "Váš systém obsahuje kombinaci verzí PHP a libxml2, která je chybná a může v MediaWiki a dalších webových aplikacích způsobovat skryté poškozování dat.\nAktualizujte na libxml2 2.7.3 nebo novější ([https://bugs.php.net/bug.php?id=45996 chyba evidovaná u PHP]).\nInstalace přerušena.",
 	"config-suhosin-max-value-length": "Je nainstalován Suhosin, který omezuje délku parametrů GET na $1 bajtů.\nKomponenta ResourceLoader z MediaWiki dokáže s tímto omezením pracovat, ale sníží to výkon.\nPokud to je alespoň trochu možné, měli byste v <code>php.ini</code> nastavit <code>suhosin.get.max_value_length</code> na 1024 nebo vyšší a na stejnou hodnotu nastavit v <code>LocalSettings.php</code> proměnnou <code>$wgResourceLoaderMaxQueryLength</code>.",
+	"config-using-32bit": "<strong>Upozornění:</strong> Vypadá to, že váš systém běží s 32bitovými celými čísly. To [https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:32-bit se nedoporučuje].",
 	"config-db-type": "Typ databáze:",
 	"config-db-host": "Databázový server:",
 	"config-db-host-help": "Pokud je váš databázový server na jiném počítači, zadejte zde jméno stroje nebo IP adresu.\n\nPokud používáte sdílený webový hosting, váš poskytovatel by vám měl v dokumentaci sdělit správné jméno stroje.\n\nPokud instalujete na server běžící na Windows a používáte MySQL, jméno „localhost“ nemusí fungovat. V takovém případě zkuste jako místní IP adresu zadat „127.0.0.1“.\n\nPokud používáte PostgreSQL, můžete se připojit Unixovými sockety tak, že toto pole necháte prázdné.",
@@ -307,6 +309,7 @@
 	"config-install-subscribe-fail": "Nelze se přihlásit k odběru mediawiki-announce: $1",
 	"config-install-subscribe-notpossible": "Není nainstalován cURL a není dostupné <code>allow_url_fopen</code>.",
 	"config-install-mainpage": "Vytváří se počáteční obsah hlavní strany",
+	"config-install-mainpage-exists": "Hlavní strana již existuje, přeskakuji.",
 	"config-install-extension-tables": "Vytvářejí se tabulky pro zapnutá rozšíření",
 	"config-install-mainpage-failed": "Nepodařilo se vložit hlavní stranu: $1",
 	"config-install-done": "<strong>Gratulujeme!</strong>\nNainstalovali jste MediaWiki.\n\nInstalátor vytvořil soubor <code>LocalSettings.php</code>.\nTen obsahuje veškerou vaši konfiguraci.\n\nBudete si ho muset stáhnout a uložit do základního adresáře vaší instalace wiki (do stejného adresáře jako soubor index.php). Stažení souboru se mělo spustit automaticky.\n\nPokud se vám stažení nenabídlo nebo jste ho zrušili, můžete ho spustit znovu kliknutím na následující odkaz:\n\n$3\n\n<strong>Poznámka</strong>: Pokud to neuděláte hned, tento vygenerovaný konfigurační soubor nebude později dostupný, pokud instalaci opustíte, aniž byste si ho stáhli.\n\nAž to dokončíte, můžete <strong>[$2 vstoupit do své wiki]</strong>.",
@@ -316,6 +319,8 @@
 	"config-help-tooltip": "rozbalíte kliknutím",
 	"config-nofile": "Soubor „$1“ nelze nalézt. Byl smazán?",
 	"config-extension-link": "Věděli jste, že vaše wiki podporuje [https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:Extensions rozšíření]?\n\nMůžete si prohlédnout [https://www.mediawiki.org/wiki/Special:MyLanguage/Category:Extensions_by_category seznam rozšíření po kategoriích].",
+	"config-skins-screenshots": "$1 (snímky obrazovky: $2)",
+	"config-screenshot": "snímek obrazovky",
 	"mainpagetext": "<strong>MediaWiki byla úspěšně nainstalována.</strong>",
-	"mainpagedocfooter": "[https://meta.wikimedia.org/wiki/Help:Contents Uživatelská příručka] vám napoví, jak používat MediaWiki.\n\n== Začínáme ==\n\n* [https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:Configuration_settings Nastavení konfigurace]\n* [https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:FAQ Často kladené otázky o MediaWiki]\n* [https://lists.wikimedia.org/mailman/listinfo/mediawiki-announce E-mailová konference oznámení MediaWiki]\n* [https://www.mediawiki.org/wiki/Special:MyLanguage/Localisation#Translation_resources Překlad MediaWiki do vašeho jazyka]\n* [https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:Combating_spam Naučte se bojovat se spamem na vaší wiki]"
+	"mainpagedocfooter": "[https://www.mediawiki.org/wiki/Special:MyLanguage/Help:Contents Uživatelská příručka] vám napoví, jak používat MediaWiki.\n\n== Začínáme ==\n* [https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:Configuration_settings Nastavení konfigurace]\n* [https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:FAQ Často kladené otázky o MediaWiki]\n* [https://lists.wikimedia.org/mailman/listinfo/mediawiki-announce E-mailová konference oznámení MediaWiki]\n* [https://www.mediawiki.org/wiki/Special:MyLanguage/Localisation#Translation_resources Překlad MediaWiki do vašeho jazyka]\n* [https://www.mediawiki.org/wiki/Special:MyLanguage/Manual:Combating_spam Naučte se bojovat se spamem na vaší wiki]"
 }

@@ -26,9 +26,9 @@ class GadgetHooks {
 	/**
 	 * PageContentSaveComplete hook handler.
 	 *
-	 * @param $article Article
-	 * @param $user User
-	 * @param $content Content New page content
+	 * @param Article $article
+	 * @param User $user
+	 * @param Content $content New page content
 	 * @return bool
 	 */
 	public static function onPageContentSaveComplete( $article, $user, $content ) {
@@ -45,7 +45,7 @@ class GadgetHooks {
 
 	/**
 	 * UserGetDefaultOptions hook handler
-	 * @param $defaultOptions Array of default preference keys and values
+	 * @param array &$defaultOptions Array of default preference keys and values
 	 * @return bool
 	 */
 	public static function userGetDefaultOptions( &$defaultOptions ) {
@@ -70,8 +70,8 @@ class GadgetHooks {
 
 	/**
 	 * GetPreferences hook handler.
-	 * @param $user User
-	 * @param $preferences Array: Preference descriptions
+	 * @param User $user
+	 * @param array &$preferences Preference descriptions
 	 * @return bool
 	 */
 	public static function getPreferences( $user, &$preferences ) {
@@ -80,10 +80,10 @@ class GadgetHooks {
 			return true;
 		}
 
-		$options = array();
-		$default = array();
+		$options = [];
+		$default = [];
 		foreach ( $gadgets as $section => $thisSection ) {
-			$available = array();
+			$available = [];
 
 			/**
 			 * @var $gadget Gadget
@@ -103,7 +103,7 @@ class GadgetHooks {
 			if ( $section !== '' ) {
 				$section = wfMessage( "gadget-section-$section" )->parse();
 
-				if ( count ( $available ) ) {
+				if ( count( $available ) ) {
 					$options[$section] = $available;
 				}
 			} else {
@@ -112,33 +112,35 @@ class GadgetHooks {
 		}
 
 		$preferences['gadgets-intro'] =
-			array(
+			[
 				'type' => 'info',
 				'label' => '&#160;',
-				'default' => Xml::tags( 'tr', array(),
-					Xml::tags( 'td', array( 'colspan' => 2 ),
+				'default' => Xml::tags( 'tr', [],
+					Xml::tags( 'td', [ 'colspan' => 2 ],
 						wfMessage( 'gadgets-prefstext' )->parseAsBlock() ) ),
 				'section' => 'gadgets',
 				'raw' => 1,
 				'rawrow' => 1,
-			);
+				'noglobal' => true,
+			];
 
 		$preferences['gadgets'] =
-			array(
+			[
 				'type' => 'multiselect',
 				'options' => $options,
 				'section' => 'gadgets',
 				'label' => '&#160;',
 				'prefix' => 'gadget-',
 				'default' => $default,
-			);
+				'noglobal' => true,
+			];
 
 		return true;
 	}
 
 	/**
 	 * ResourceLoaderRegisterModules hook handler.
-	 * @param $resourceLoader ResourceLoader
+	 * @param ResourceLoader &$resourceLoader
 	 * @return bool
 	 */
 	public static function registerModules( &$resourceLoader ) {
@@ -146,10 +148,10 @@ class GadgetHooks {
 		$ids = $repo->getGadgetIds();
 
 		foreach ( $ids as $id ) {
-			$resourceLoader->register( Gadget::getModuleName( $id ), array(
+			$resourceLoader->register( Gadget::getModuleName( $id ), [
 				'class' => 'GadgetResourceLoaderModule',
 				'id' => $id,
-			) );
+			] );
 		}
 
 		return true;
@@ -157,7 +159,7 @@ class GadgetHooks {
 
 	/**
 	 * BeforePageDisplay hook handler.
-	 * @param $out OutputPage
+	 * @param OutputPage $out
 	 * @return bool
 	 */
 	public static function beforePageDisplay( $out ) {
@@ -169,8 +171,7 @@ class GadgetHooks {
 
 		$lb = new LinkBatch();
 		$lb->setCaller( __METHOD__ );
-		$enabledLegacyGadgets = array();
-		$typelessMixedGadgets = array();
+		$enabledLegacyGadgets = [];
 
 		/**
 		 * @var $gadget Gadget
@@ -182,16 +183,30 @@ class GadgetHooks {
 			} catch ( InvalidArgumentException $e ) {
 				continue;
 			}
+			$peers = [];
+			foreach ( $gadget->getPeers() as $peerName ) {
+				try {
+					$peers[] = $repo->getGadget( $peerName );
+				} catch ( InvalidArgumentException $e ) {
+					// Ignore
+					// @todo: Emit warning for invalid peer?
+				}
+			}
 			if ( $gadget->isEnabled( $user ) && $gadget->isAllowed( $user ) ) {
 				if ( $gadget->hasModule() ) {
 					if ( $gadget->getType() === 'styles' ) {
 						$out->addModuleStyles( Gadget::getModuleName( $gadget->getName() ) );
-					} elseif ( $gadget->getType() === 'general' ) {
-						$out->addModules( Gadget::getModuleName( $gadget->getName() ) );
 					} else {
-						$out->addModuleStyles( Gadget::getModuleName( $gadget->getName() ) );
 						$out->addModules( Gadget::getModuleName( $gadget->getName() ) );
-						$typelessMixedGadgets[] = $id;
+						// Load peer modules
+						foreach ( $peers as $peer ) {
+							if ( $peer->getType() === 'styles' ) {
+								$out->addModuleStyles( Gadget::getModuleName( $peer->getName() ) );
+							}
+							// Else, if not type=styles: Use dependencies instead.
+							// Note: No need for recursion as styles modules don't support
+							// either of 'dependencies' and 'peers'.
+						}
 					}
 				}
 
@@ -201,12 +216,9 @@ class GadgetHooks {
 			}
 		}
 
-		$strings = array();
+		$strings = [];
 		foreach ( $enabledLegacyGadgets as $id ) {
 			$strings[] = self::makeLegacyWarning( $id );
-		}
-		foreach ( $typelessMixedGadgets as $id ) {
-			$strings[] = self::makeTypelessWarning( $id );
 		}
 		$out->addHTML( WrappedString::join( "\n", $strings ) );
 
@@ -217,18 +229,11 @@ class GadgetHooks {
 		$special = SpecialPage::getTitleFor( 'Gadgets' );
 
 		return ResourceLoader::makeInlineScript(
-			Xml::encodeJsCall( 'mw.log.warn', array(
+			Xml::encodeJsCall( 'mw.log.warn', [
 				"Gadget \"$id\" was not loaded. Please migrate it to use ResourceLoader. " .
 				'See <' . $special->getCanonicalURL() . '>.'
-			) )
+			] )
 		);
-	}
-
-	private static function makeTypelessWarning( $id ) {
-		return ResourceLoader::makeInlineScript( Xml::encodeJsCall( 'mw.log.warn', array(
-			"Gadget \"$id\" styles loaded twice. Migrate to type=general. " .
-			'See <https://phabricator.wikimedia.org/T42284>.'
-		) ) );
 	}
 
 	/**
@@ -250,7 +255,9 @@ class GadgetHooks {
 
 		if ( !$content instanceof GadgetDefinitionContent ) {
 			// This should not be possible?
-			throw new Exception( "Tried to save non-GadgetDefinitionContent to {$title->getPrefixedText()}" );
+			throw new Exception(
+				"Tried to save non-GadgetDefinitionContent to {$title->getPrefixedText()}"
+			);
 		}
 
 		$status = $content->validate();
@@ -282,7 +289,7 @@ class GadgetHooks {
 	 * in the Gadget namespace based on their file extension
 	 *
 	 * @param Title $title
-	 * @param string $model
+	 * @param string &$model
 	 * @return bool
 	 */
 	public static function onContentHandlerDefaultModelFor( Title $title, &$model ) {
@@ -307,7 +314,7 @@ class GadgetHooks {
 	 * knows the language for Gadget: namespace pages.
 	 *
 	 * @param Title $title
-	 * @param string $lang
+	 * @param string &$lang
 	 * @return bool
 	 */
 	public static function onCodeEditorGetPageLanguage( Title $title, &$lang ) {
@@ -325,7 +332,7 @@ class GadgetHooks {
 	 * @return bool
 	 */
 	public static function onwgQueryPages( &$queryPages ) {
-		$queryPages[] = array( 'SpecialGadgetUsage', 'GadgetUsage' );
+		$queryPages[] = [ 'SpecialGadgetUsage', 'GadgetUsage' ];
 		return true;
 	}
 }

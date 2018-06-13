@@ -7,7 +7,7 @@
  * and should be used instead.
  */
 class HTMLSelectOrOtherField extends HTMLTextField {
-	function __construct( $params ) {
+	public function __construct( $params ) {
 		parent::__construct( $params );
 		$this->getOptions();
 		if ( !in_array( 'other', $this->mOptions, true ) ) {
@@ -18,10 +18,9 @@ class HTMLSelectOrOtherField extends HTMLTextField {
 			// Have 'other' always as first element
 			$this->mOptions = [ $msg => 'other' ] + $this->mOptions;
 		}
-
 	}
 
-	function getInputHTML( $value ) {
+	public function getInputHTML( $value ) {
 		$valInSelect = false;
 
 		if ( $value !== false ) {
@@ -65,8 +64,80 @@ class HTMLSelectOrOtherField extends HTMLTextField {
 		return "$select<br />\n$textbox";
 	}
 
-	function getInputOOUI( $value ) {
-		return false;
+	protected function shouldInfuseOOUI() {
+		return true;
+	}
+
+	protected function getOOUIModules() {
+		return [ 'mediawiki.widgets.SelectWithInputWidget' ];
+	}
+
+	public function getInputOOUI( $value ) {
+		$this->mParent->getOutput()->addModuleStyles( 'mediawiki.widgets.SelectWithInputWidget.styles' );
+
+		$valInSelect = false;
+		if ( $value !== false ) {
+			$value = strval( $value );
+			$valInSelect = in_array(
+				$value, HTMLFormField::flattenOptions( $this->getOptions() ), true
+			);
+		}
+
+		# DropdownInput
+		$dropdownAttribs = [
+			'id' => $this->mID,
+			'name' => $this->mName,
+			'options' => $this->getOptionsOOUI(),
+			'value' => $valInSelect ? $value : 'other',
+			'class' => [ 'mw-htmlform-select-or-other' ],
+		];
+
+		$allowedParams = [
+			'disabled',
+			'tabindex',
+		];
+
+		$dropdownAttribs += OOUI\Element::configFromHtmlAttributes(
+			$this->getAttributes( $allowedParams )
+		);
+
+		# TextInput
+		$textAttribs = [
+			'id' => $this->mID . '-other',
+			'name' => $this->mName . '-other',
+			'size' => $this->getSize(),
+			'value' => $valInSelect ? '' : $value,
+		];
+
+		$allowedParams = [
+			'required',
+			'autofocus',
+			'multiple',
+			'disabled',
+			'tabindex',
+			'maxlength',
+		];
+
+		$textAttribs += OOUI\Element::configFromHtmlAttributes(
+			$this->getAttributes( $allowedParams )
+		);
+
+		if ( $this->mClass !== '' ) {
+			$textAttribs['classes'] = [ $this->mClass ];
+		}
+		if ( $this->mPlaceholder !== '' ) {
+			$textAttribs['placeholder'] = $this->mPlaceholder;
+		}
+
+		return $this->getInputWidget( [
+			'textinput' => $textAttribs,
+			'dropdowninput' => $dropdownAttribs,
+			'or' => true,
+		] );
+	}
+
+	public function getInputWidget( $params ) {
+		return new Mediawiki\Widget\SelectWithInputWidget( $params );
 	}
 
 	/**
@@ -74,7 +145,7 @@ class HTMLSelectOrOtherField extends HTMLTextField {
 	 *
 	 * @return string
 	 */
-	function loadDataFromRequest( $request ) {
+	public function loadDataFromRequest( $request ) {
 		if ( $request->getCheck( $this->mName ) ) {
 			$val = $request->getText( $this->mName );
 

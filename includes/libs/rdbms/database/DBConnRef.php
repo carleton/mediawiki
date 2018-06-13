@@ -1,35 +1,39 @@
 <?php
+
+namespace Wikimedia\Rdbms;
+
+use InvalidArgumentException;
+
 /**
  * Helper class to handle automatically marking connections as reusable (via RAII pattern)
  * as well handling deferring the actual network connection until the handle is used
  *
- * @note: proxy methods are defined explicity to avoid interface errors
+ * @note: proxy methods are defined explicitly to avoid interface errors
  * @ingroup Database
  * @since 1.22
  */
 class DBConnRef implements IDatabase {
 	/** @var ILoadBalancer */
 	private $lb;
-
-	/** @var IDatabase|null Live connection handle */
+	/** @var Database|null Live connection handle */
 	private $conn;
-
 	/** @var array|null N-tuple of (server index, group, DatabaseDomain|string) */
 	private $params;
 
 	const FLD_INDEX = 0;
 	const FLD_GROUP = 1;
 	const FLD_DOMAIN = 2;
+	const FLD_FLAGS = 3;
 
 	/**
-	 * @param ILoadBalancer $lb
-	 * @param IDatabase|array $conn Connection or (server index, group, DatabaseDomain|string)
+	 * @param ILoadBalancer $lb Connection manager for $conn
+	 * @param Database|array $conn Database handle or (server index, query groups, domain, flags)
 	 */
 	public function __construct( ILoadBalancer $lb, $conn ) {
 		$this->lb = $lb;
-		if ( $conn instanceof IDatabase ) {
+		if ( $conn instanceof Database ) {
 			$this->conn = $conn; // live handle
-		} elseif ( count( $conn ) >= 3 && $conn[self::FLD_DOMAIN] !== false ) {
+		} elseif ( count( $conn ) >= 4 && $conn[self::FLD_DOMAIN] !== false ) {
 			$this->params = $conn;
 		} else {
 			throw new InvalidArgumentException( "Missing lazy connection arguments." );
@@ -38,8 +42,8 @@ class DBConnRef implements IDatabase {
 
 	function __call( $name, array $arguments ) {
 		if ( $this->conn === null ) {
-			list( $db, $groups, $wiki ) = $this->params;
-			$this->conn = $this->lb->getConnection( $db, $groups, $wiki );
+			list( $db, $groups, $wiki, $flags ) = $this->params;
+			$this->conn = $this->lb->getConnection( $db, $groups, $wiki, $flags );
 		}
 
 		return call_user_func_array( [ $this->conn, $name ], $arguments );
@@ -118,6 +122,10 @@ class DBConnRef implements IDatabase {
 	}
 
 	public function pendingWriteCallers() {
+		return $this->__call( __FUNCTION__, func_get_args() );
+	}
+
+	public function pendingWriteRowsAffected() {
 		return $this->__call( __FUNCTION__, func_get_args() );
 	}
 
@@ -240,13 +248,13 @@ class DBConnRef implements IDatabase {
 	}
 
 	public function selectField(
-		$table, $var, $cond = '', $fname = __METHOD__, $options = []
+		$table, $var, $cond = '', $fname = __METHOD__, $options = [], $join_conds = []
 	) {
 		return $this->__call( __FUNCTION__, func_get_args() );
 	}
 
 	public function selectFieldValues(
-		$table, $var, $cond = '', $fname = __METHOD__, $options = []
+		$table, $var, $cond = '', $fname = __METHOD__, $options = [], $join_conds = []
 	) {
 		return $this->__call( __FUNCTION__, func_get_args() );
 	}
@@ -346,6 +354,10 @@ class DBConnRef implements IDatabase {
 		return $this->__call( __FUNCTION__, func_get_args() );
 	}
 
+	public function databasesAreIndependent() {
+		return $this->__call( __FUNCTION__, func_get_args() );
+	}
+
 	public function selectDB( $db ) {
 		return $this->__call( __FUNCTION__, func_get_args() );
 	}
@@ -400,7 +412,7 @@ class DBConnRef implements IDatabase {
 
 	public function insertSelect(
 		$destTable, $srcTable, $varMap, $conds,
-		$fname = __METHOD__, $insertOptions = [], $selectOptions = []
+		$fname = __METHOD__, $insertOptions = [], $selectOptions = [], $selectJoinConds = []
 	) {
 		return $this->__call( __FUNCTION__, func_get_args() );
 	}
@@ -410,6 +422,13 @@ class DBConnRef implements IDatabase {
 	}
 
 	public function unionQueries( $sqls, $all ) {
+		return $this->__call( __FUNCTION__, func_get_args() );
+	}
+
+	public function unionConditionPermutations(
+		$table, $vars, array $permute_conds, $extra_conds = '', $fname = __METHOD__,
+		$options = [], $join_conds = []
+	) {
 		return $this->__call( __FUNCTION__, func_get_args() );
 	}
 
@@ -595,16 +614,10 @@ class DBConnRef implements IDatabase {
 	 * Clean up the connection when out of scope
 	 */
 	function __destruct() {
-		if ( $this->conn !== null ) {
+		if ( $this->conn ) {
 			$this->lb->reuseConnection( $this->conn );
 		}
 	}
-
-	/**
-	 * @deprecated since 1.28 use SearchEngineFactory::getSearchEngineClass instead
-	 * @return string
-	 */
-	public function getSearchEngine() {
-		return $this->__call( __FUNCTION__, func_get_args() );
-	}
 }
+
+class_alias( DBConnRef::class, 'DBConnRef' );

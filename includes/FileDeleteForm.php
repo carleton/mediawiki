@@ -21,6 +21,7 @@
  * @author Rob Church <robchur@gmail.com>
  * @ingroup Media
  */
+use MediaWiki\MediaWikiServices;
 
 /**
  * File deletion user interface
@@ -46,8 +47,6 @@ class FileDeleteForm {
 	private $oldimage = '';
 
 	/**
-	 * Constructor
-	 *
 	 * @param File $file File object we're deleting
 	 */
 	public function __construct( $file ) {
@@ -144,15 +143,15 @@ class FileDeleteForm {
 	/**
 	 * Really delete the file
 	 *
-	 * @param Title $title
-	 * @param File $file
-	 * @param string $oldimage Archive name
+	 * @param Title &$title
+	 * @param File &$file
+	 * @param string &$oldimage Archive name
 	 * @param string $reason Reason of the deletion
 	 * @param bool $suppress Whether to mark all deleted versions as restricted
 	 * @param User $user User object performing the request
 	 * @param array $tags Tags to apply to the deletion action
 	 * @throws MWException
-	 * @return bool|Status
+	 * @return Status
 	 */
 	public static function doDelete( &$title, &$file, &$oldimage, $reason,
 		$suppress, User $user = null, $tags = []
@@ -201,11 +200,32 @@ class FileDeleteForm {
 			if ( $deleteStatus->isOK() ) {
 				$status = $file->delete( $reason, $suppress, $user );
 				if ( $status->isOK() ) {
-					$status->value = $deleteStatus->value; // log id
+					if ( $deleteStatus->value === null ) {
+						// No log ID from doDeleteArticleReal(), probably
+						// because the page/revision didn't exist, so create
+						// one here.
+						$logtype = $suppress ? 'suppress' : 'delete';
+						$logEntry = new ManualLogEntry( $logtype, 'delete' );
+						$logEntry->setPerformer( $user );
+						$logEntry->setTarget( clone $title );
+						$logEntry->setComment( $reason );
+						$logEntry->setTags( $tags );
+						$logid = $logEntry->insert();
+						$dbw->onTransactionPreCommitOrIdle(
+							function () use ( $dbw, $logEntry, $logid ) {
+								$logEntry->publish( $logid );
+							},
+							__METHOD__
+						);
+						$status->value = $logid;
+					} else {
+						$status->value = $deleteStatus->value; // log id
+					}
 					$dbw->endAtomic( __METHOD__ );
 				} else {
 					// Page deleted but file still there? rollback page delete
-					wfGetLBFactory()->rollbackMasterChanges( __METHOD__ );
+					$lbFactory = MediaWikiServices::getInstance()->getDBLoadBalancerFactory();
+					$lbFactory->rollbackMasterChanges( __METHOD__ );
 				}
 			} else {
 				// Done; nothing changed
@@ -301,9 +321,10 @@ class FileDeleteForm {
 
 			if ( $wgUser->isAllowed( 'editinterface' ) ) {
 				$title = wfMessage( 'filedelete-reason-dropdown' )->inContentLanguage()->getTitle();
-				$link = Linker::linkKnown(
+				$linkRenderer = MediaWikiServices::getInstance()->getLinkRenderer();
+				$link = $linkRenderer->makeKnownLink(
 					$title,
-					wfMessage( 'filedelete-edit-reasonlist' )->escaped(),
+					wfMessage( 'filedelete-edit-reasonlist' )->text(),
 					[],
 					[ 'action' => 'edit' ]
 				);
@@ -377,8 +398,8 @@ class FileDeleteForm {
 	 * value was provided, does it correspond to an
 	 * existing, local, old version of this file?
 	 *
-	 * @param File $file
-	 * @param File $oldfile
+	 * @param File &$file
+	 * @param File &$oldfile
 	 * @param File $oldimage
 	 * @return bool
 	 */

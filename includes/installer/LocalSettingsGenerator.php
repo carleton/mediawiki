@@ -41,8 +41,6 @@ class LocalSettingsGenerator {
 	protected $installer;
 
 	/**
-	 * Constructor.
-	 *
 	 * @param Installer $installer
 	 */
 	public function __construct( Installer $installer ) {
@@ -69,7 +67,7 @@ class LocalSettingsGenerator {
 			$db->getGlobalNames()
 		);
 
-		$unescaped = [ 'wgRightsIcon', 'wgLogo' ];
+		$unescaped = [ 'wgRightsIcon', 'wgLogo', '_Caches' ];
 		$boolItems = [
 			'wgEnableEmail', 'wgEnableUserEmail', 'wgEnotifUserTalk',
 			'wgEnotifWatchlist', 'wgEmailAuthentication', 'wgEnableUploads', 'wgUseInstantCommons',
@@ -109,7 +107,7 @@ class LocalSettingsGenerator {
 	 *
 	 * @param string $string
 	 *
-	 * @return string
+	 * @return string|false
 	 */
 	public static function escapePhpString( $string ) {
 		if ( is_array( $string ) || is_object( $string ) ) {
@@ -241,7 +239,7 @@ class LocalSettingsGenerator {
 		}
 
 		if ( !$this->values['wgShellLocale'] ) {
-			$this->values['wgShellLocale'] = 'en_US.UTF-8';
+			$this->values['wgShellLocale'] = 'C.UTF-8';
 			$locale = '#';
 		} else {
 			$locale = '';

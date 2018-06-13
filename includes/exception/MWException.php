@@ -64,17 +64,6 @@ class MWException extends Exception {
 	}
 
 	/**
-	 * Run hook to allow extensions to modify the text of the exception
-	 *
-	 * @param string $name Class name of the exception
-	 * @param array $args Arguments to pass to the callback functions
-	 * @return string|null String to output or null if any hook has been called
-	 */
-	public function runHooks( $name, $args = [] ) {
-		return MWExceptionRenderer::runHooks( $this, $name, $args );
-	}
-
-	/**
 	 * Get a message from i18n
 	 *
 	 * @param string $key Message name
@@ -112,15 +101,17 @@ class MWException extends Exception {
 			"</p>\n";
 		} else {
 			$logId = WebRequest::getRequestId();
-			$type = get_class( $this );
+			$type = static::class;
 			return "<div class=\"errorbox\">" .
-			'[' . $logId . '] ' .
-			gmdate( 'Y-m-d H:i:s' ) . ": " .
-			$this->msg( "internalerror-fatal-exception",
-				"Fatal exception of type $1",
-				$type,
-				$logId,
-				MWExceptionHandler::getURL( $this )
+			htmlspecialchars(
+				'[' . $logId . '] ' .
+				gmdate( 'Y-m-d H:i:s' ) . ": " .
+				$this->msg( "internalerror-fatal-exception",
+					"Fatal exception of type $1",
+					$type,
+					$logId,
+					MWExceptionHandler::getURL( $this )
+				)
 			) . "</div>\n" .
 			"<!-- Set \$wgShowExceptionDetails = true; " .
 			"at the bottom of LocalSettings.php to show detailed " .
@@ -164,12 +155,7 @@ class MWException extends Exception {
 		if ( $this->useOutputPage() ) {
 			$wgOut->prepareErrorPage( $this->getPageTitle() );
 
-			$hookResult = $this->runHooks( get_class( $this ) );
-			if ( $hookResult ) {
-				$wgOut->addHTML( $hookResult );
-			} else {
-				$wgOut->addHTML( $this->getHTML() );
-			}
+			$wgOut->addHTML( $this->getHTML() );
 
 			$wgOut->output();
 		} else {
@@ -183,12 +169,7 @@ class MWException extends Exception {
 				'<style>body { font-family: sans-serif; margin: 0; padding: 0.5em 2em; }</style>' .
 				"</head><body>\n";
 
-			$hookResult = $this->runHooks( get_class( $this ) . 'Raw' );
-			if ( $hookResult ) {
-				echo $hookResult;
-			} else {
-				echo $this->getHTML();
-			}
+			echo $this->getHTML();
 
 			echo "</body></html>\n";
 		}
@@ -203,7 +184,7 @@ class MWException extends Exception {
 
 		if ( defined( 'MW_API' ) ) {
 			// Unhandled API exception, we can't be sure that format printer is alive
-			self::header( 'MediaWiki-API-Error: internal_api_error_' . get_class( $this ) );
+			self::header( 'MediaWiki-API-Error: internal_api_error_' . static::class );
 			wfHttpError( 500, 'Internal Server Error', $this->getText() );
 		} elseif ( self::isCommandLine() ) {
 			$message = $this->getText();

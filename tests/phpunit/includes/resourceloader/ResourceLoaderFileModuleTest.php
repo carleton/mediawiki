@@ -31,15 +31,19 @@ class ResourceLoaderFileModuleTest extends ResourceLoaderTestCase {
 				'deprecated' => true,
 			],
 			'deprecatedTomorrow' => $base + [
-				'deprecated' => [
-					'message' => 'Will be removed tomorrow.'
-				],
+				'deprecated' => 'Will be removed tomorrow.'
 			],
 
 			'htmlTemplateModule' => $base + [
 				'templates' => [
 					'templates/template.html',
 					'templates/template2.html',
+				]
+			],
+
+			'htmlTemplateUnknown' => $base + [
+				'templates' => [
+					'templates/notfound.html',
 				]
 			],
 
@@ -128,10 +132,30 @@ class ResourceLoaderFileModuleTest extends ResourceLoaderTestCase {
 	 */
 	public function testDeprecatedModules( $name, $expected ) {
 		$modules = self::getModules();
-		$rl = new ResourceLoaderFileModule( $modules[$name] );
-		$rl->setName( $name );
-		$ctx = $this->getResourceLoaderContext( 'en', 'ltr' );
-		$this->assertEquals( $rl->getScript( $ctx ), $expected );
+		$module = new ResourceLoaderFileModule( $modules[$name] );
+		$module->setName( $name );
+		$ctx = $this->getResourceLoaderContext();
+		$this->assertEquals( $module->getScript( $ctx ), $expected );
+	}
+
+	/**
+	 * @covers ResourceLoaderFileModule::getScript
+	 */
+	public function testGetScript() {
+		$module = new ResourceLoaderFileModule( [
+			'localBasePath' => __DIR__ . '/../../data/resourceloader',
+			'scripts' => [ 'script-nosemi.js', 'script-comment.js' ],
+		] );
+		$module->setName( 'testing' );
+		$ctx = $this->getResourceLoaderContext();
+		$this->assertEquals(
+			"/* eslint-disable */\nmw.foo()\n" .
+			"\n" .
+			"/* eslint-disable */\nmw.foo()\n// mw.bar();\n" .
+			"\n",
+			$module->getScript( $ctx ),
+			'scripts are concatenated with a new-line'
+		);
 	}
 
 	/**
@@ -210,8 +234,14 @@ class ResourceLoaderFileModuleTest extends ResourceLoaderTestCase {
 		] );
 		$expectedModule->setName( 'testing' );
 
-		$contextLtr = $this->getResourceLoaderContext( 'en', 'ltr' );
-		$contextRtl = $this->getResourceLoaderContext( 'he', 'rtl' );
+		$contextLtr = $this->getResourceLoaderContext( [
+			'lang' => 'en',
+			'dir' => 'ltr',
+		] );
+		$contextRtl = $this->getResourceLoaderContext( [
+			'lang' => 'he',
+			'dir' => 'rtl',
+		] );
 
 		// Since we want to compare the effect of @noflip+@embed against the effect of just @embed, and
 		// the @noflip annotations are always preserved, we need to strip them first.
@@ -255,6 +285,10 @@ class ResourceLoaderFileModuleTest extends ResourceLoaderTestCase {
 					'bar.html' => "<div>goodbye</div>\n",
 				],
 			],
+			[
+				$modules['htmlTemplateUnknown'],
+				false,
+			],
 		];
 	}
 
@@ -266,9 +300,17 @@ class ResourceLoaderFileModuleTest extends ResourceLoaderTestCase {
 		$rl = new ResourceLoaderFileModule( $module );
 		$rl->setName( 'testing' );
 
-		$this->assertEquals( $rl->getTemplates(), $expected );
+		if ( $expected === false ) {
+			$this->setExpectedException( MWException::class );
+			$rl->getTemplates();
+		} else {
+			$this->assertEquals( $rl->getTemplates(), $expected );
+		}
 	}
 
+	/**
+	 * @covers ResourceLoaderFileModule::stripBom
+	 */
 	public function testBomConcatenation() {
 		$basePath = __DIR__ . '/../../data/css';
 		$testModule = new ResourceLoaderFileModule( [
@@ -282,11 +324,30 @@ class ResourceLoaderFileModuleTest extends ResourceLoaderTestCase {
 			'File has leading BOM'
 		);
 
-		$contextLtr = $this->getResourceLoaderContext( 'en', 'ltr' );
+		$context = $this->getResourceLoaderContext();
 		$this->assertEquals(
-			$testModule->getStyles( $contextLtr ),
+			$testModule->getStyles( $context ),
 			[ 'all' => ".efbbbf_bom_char_at_start_of_file {}\n" ],
 			'Leading BOM removed when concatenating files'
+		);
+	}
+
+	/**
+	 * @covers ResourceLoaderFileModule::getDefinitionSummary
+	 */
+	public function testGetVersionHash() {
+		$context = $this->getResourceLoaderContext();
+
+		// Less variables
+		$module = new ResourceLoaderFileTestModule();
+		$version = $module->getVersionHash( $context );
+		$module = new ResourceLoaderFileTestModule( [], [
+			'lessVars' => [ 'key' => 'value' ],
+		] );
+		$this->assertNotEquals(
+			$version,
+			$module->getVersionHash( $context ),
+			'Using less variables is significant'
 		);
 	}
 }

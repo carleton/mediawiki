@@ -46,16 +46,21 @@ class Http {
 	 *    - caInfo              Provide CA information
 	 *    - maxRedirects        Maximum number of redirects to follow (defaults to 5)
 	 *    - followRedirects     Whether to follow redirects (defaults to false).
-	 *		                    Note: this should only be used when the target URL is trusted,
-	 *		                    to avoid attacks on intranet services accessible by HTTP.
+	 *                          Note: this should only be used when the target URL is trusted,
+	 *                          to avoid attacks on intranet services accessible by HTTP.
 	 *    - userAgent           A user agent, if you want to override the default
 	 *                          MediaWiki/$wgVersion
 	 *    - logger              A \Psr\Logger\LoggerInterface instance for debug logging
+	 *    - username            Username for HTTP Basic Authentication
+	 *    - password            Password for HTTP Basic Authentication
+	 *    - originalRequest     Information about the original request (as a WebRequest object or
+	 *                          an associative array with 'ip' and 'userAgent').
 	 * @param string $caller The method making this request, for profiling
 	 * @return string|bool (bool)false on failure or a string on success
 	 */
 	public static function request( $method, $url, $options = [], $caller = __METHOD__ ) {
-		wfDebug( "HTTP: $method: $url\n" );
+		$logger = LoggerFactory::getInstance( 'http' );
+		$logger->debug( "$method: $url" );
 
 		$options['method'] = strtoupper( $method );
 
@@ -73,8 +78,7 @@ class Http {
 			return $req->getContent();
 		} else {
 			$errors = $status->getErrorsByType( 'error' );
-			$logger = LoggerFactory::getInstance( 'http' );
-			$logger->warning( $status->getWikiText( false, false, 'en' ),
+			$logger->warning( Status::wrap( $status )->getWikiText( false, false, 'en' ),
 				[ 'error' => $errors, 'caller' => $caller, 'content' => $req->getContent() ] );
 			return false;
 		}
@@ -102,7 +106,7 @@ class Http {
 			$options['timeout'] = $args[1];
 			$caller = __METHOD__;
 		}
-		return Http::request( 'GET', $url, $options, $caller );
+		return self::request( 'GET', $url, $options, $caller );
 	}
 
 	/**
@@ -115,7 +119,7 @@ class Http {
 	 * @return string|bool false on error
 	 */
 	public static function post( $url, $options = [], $caller = __METHOD__ ) {
-		return Http::request( 'POST', $url, $options, $caller );
+		return self::request( 'POST', $url, $options, $caller );
 	}
 
 	/**
@@ -140,7 +144,7 @@ class Http {
 	 * @return bool
 	 */
 	public static function isValidURI( $uri ) {
-		return preg_match(
+		return (bool)preg_match(
 			'/^https?:\/\/[^\/\s]\S*$/D',
 			$uri
 		);
@@ -159,5 +163,22 @@ class Http {
 		}
 
 		return "";
+	}
+
+	/**
+	 * Get a configured MultiHttpClient
+	 * @param array $options
+	 * @return MultiHttpClient
+	 */
+	public static function createMultiClient( $options = [] ) {
+		global $wgHTTPConnectTimeout, $wgHTTPTimeout, $wgHTTPProxy;
+
+		return new MultiHttpClient( $options + [
+			'connTimeout' => $wgHTTPConnectTimeout,
+			'reqTimeout' => $wgHTTPTimeout,
+			'userAgent' => self::userAgent(),
+			'proxy' => $wgHTTPProxy,
+			'logger' => LoggerFactory::getInstance( 'http' )
+		] );
 	}
 }

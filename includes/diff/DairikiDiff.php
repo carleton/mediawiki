@@ -67,7 +67,7 @@ abstract class DiffOp {
 
 	/**
 	 * @param int $i
-	 * @return string|null
+	 * @return string[]|string|null
 	 */
 	public function getClosing( $i = null ) {
 		if ( $i === null ) {
@@ -211,7 +211,6 @@ class Diff {
 	protected $bailoutComplexity = 0;
 
 	/**
-	 * Constructor.
 	 * Computes diff between sequences of strings.
 	 *
 	 * @param string[] $from_lines An array of strings.

@@ -85,7 +85,7 @@ abstract class MediaHandler {
 	 * Should be idempotent.
 	 * Returns false if the parameters are unacceptable and the transform should fail
 	 * @param File $image
-	 * @param array $params
+	 * @param array &$params
 	 */
 	abstract function normaliseParams( $image, &$params );
 
@@ -104,7 +104,7 @@ abstract class MediaHandler {
 	 *   Warning, FSFile::getPropsFromPath might pass an FSFile instead of File (!)
 	 * @param string $path The filename
 	 * @return array|bool Follow the format of PHP getimagesize() internal function.
-	 *   See http://www.php.net/getimagesize. MediaWiki will only ever use the
+	 *   See https://secure.php.net/getimagesize. MediaWiki will only ever use the
 	 *   first two array keys (the width and height), and the 'bits' associative
 	 *   key. All other array keys are ignored. Returning a 'bits' key is optional
 	 *   as not all formats have a notion of "bitdepth". Returns false on failure.
@@ -157,7 +157,6 @@ abstract class MediaHandler {
 	 */
 	function convertMetadataVersion( $metadata, $version = 1 ) {
 		if ( !is_array( $metadata ) ) {
-
 			// unserialize to keep return parameter consistent.
 			MediaWiki\suppressWarnings();
 			$ret = unserialize( $metadata );
@@ -305,13 +304,13 @@ abstract class MediaHandler {
 	}
 
 	/**
-	 * Get useful response headers for GET/HEAD requests for a file with the given metadata
-	 *
-	 * @param mixed $metadata Result of the getMetadata() function of this handler for a file
+	 * @deprecated since 1.30, use MediaHandler::getContentHeaders instead
+	 * @param array $metadata
 	 * @return array
 	 */
 	public function getStreamHeaders( $metadata ) {
-		return [];
+		wfDeprecated( __METHOD__, '1.30' );
+		return $this->getContentHeaders( $metadata );
 	}
 
 	/**
@@ -715,7 +714,7 @@ abstract class MediaHandler {
 	 *
 	 * @see LocalFile::purgeThumbnails
 	 *
-	 * @param array $files
+	 * @param array &$files
 	 * @param array $options Purge options. Currently will always be
 	 *  an array with a single key 'forThumbRefresh' set to true.
 	 */
@@ -762,7 +761,7 @@ abstract class MediaHandler {
 	 * @param string $cmd
 	 */
 	protected function logErrorForExternalProcess( $retval, $err, $cmd ) {
-		# Keep error output limited (bug 57985)
+		# Keep error output limited (T59985)
 		$errMessage = trim( substr( $err, 0, self::MAX_ERR_LOG_SIZE ) );
 
 		wfDebugLog( 'thumbnail',
@@ -867,5 +866,61 @@ abstract class MediaHandler {
 	 */
 	public function getWarningConfig( $file ) {
 		return null;
+	}
+
+	/**
+	 * Converts a dimensions array about a potentially multipage document from an
+	 * exhaustive list of ordered page numbers to a list of page ranges
+	 * @param Array $pagesByDimensions
+	 * @return String
+	 * @since 1.30
+	 */
+	public static function getPageRangesByDimensions( $pagesByDimensions ) {
+		$pageRangesByDimensions = [];
+
+		foreach ( $pagesByDimensions as $dimensions => $pageList ) {
+			$ranges = [];
+			$firstPage = $pageList[0];
+			$lastPage = $firstPage - 1;
+
+			foreach ( $pageList as $page ) {
+				if ( $page > $lastPage + 1 ) {
+					if ( $firstPage != $lastPage ) {
+						$ranges[] = "$firstPage-$lastPage";
+					} else {
+						$ranges[] = "$firstPage";
+					}
+
+					$firstPage = $page;
+				}
+
+				$lastPage = $page;
+			}
+
+			if ( $firstPage != $lastPage ) {
+				$ranges[] = "$firstPage-$lastPage";
+			} else {
+				$ranges[] = "$firstPage";
+			}
+
+			$pageRangesByDimensions[ $dimensions ] = $ranges;
+		}
+
+		$dimensionsString = [];
+		foreach ( $pageRangesByDimensions as $dimensions => $pageRanges ) {
+			$dimensionsString[] = "$dimensions:" . implode( ',', $pageRanges );
+		}
+
+		return implode( '/', $dimensionsString );
+	}
+
+	/**
+	 * Get useful response headers for GET/HEAD requests for a file with the given metadata
+	 * @param array $metadata Contains this handler's unserialized getMetadata() for a file
+	 * @return array
+	 * @since 1.30
+	 */
+	public function getContentHeaders( $metadata ) {
+		return [];
 	}
 }

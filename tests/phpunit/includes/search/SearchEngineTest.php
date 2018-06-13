@@ -121,7 +121,63 @@ class SearchEngineTest extends MediaWikiLangTestCase {
 		$this->assertEquals(
 			[ 'Smithee' ],
 			$this->fetchIds( $this->search->searchText( 'smithee' ) ),
-			"Plain search failed" );
+			"Plain search" );
+	}
+
+	public function testWildcardSearch() {
+		$res = $this->search->searchText( 'smith*' );
+		$this->assertEquals(
+			[ 'Smithee' ],
+			$this->fetchIds( $res ),
+			"Search with wildcards" );
+
+		$res = $this->search->searchText( 'smithson*' );
+		$this->assertEquals(
+			[],
+			$this->fetchIds( $res ),
+			"Search with wildcards must not find unrelated articles" );
+
+		$res = $this->search->searchText( 'smith* smithee' );
+		$this->assertEquals(
+			[ 'Smithee' ],
+			$this->fetchIds( $res ),
+			"Search with wildcards can be combined with simple terms" );
+
+		$res = $this->search->searchText( 'smith* "one who smiths"' );
+		$this->assertEquals(
+			[ 'Smithee' ],
+			$this->fetchIds( $res ),
+			"Search with wildcards can be combined with phrase search" );
+	}
+
+	public function testPhraseSearch() {
+		$res = $this->search->searchText( '"smithee is one who smiths"' );
+		$this->assertEquals(
+			[ 'Smithee' ],
+			$this->fetchIds( $res ),
+			"Search a phrase" );
+
+		$res = $this->search->searchText( '"smithee is who smiths"' );
+		$this->assertEquals(
+			[],
+			$this->fetchIds( $res ),
+			"Phrase search is not sloppy, search terms must be adjacent" );
+
+		$res = $this->search->searchText( '"is smithee one who smiths"' );
+		$this->assertEquals(
+			[],
+			$this->fetchIds( $res ),
+			"Phrase search is ordered" );
+	}
+
+	public function testPhraseSearchHighlight() {
+		$phrase = "smithee is one who smiths";
+		$res = $this->search->searchText( "\"$phrase\"" );
+		$match = $res->next();
+		$snippet = "A <span class='searchmatch'>" . $phrase . "</span>";
+		$this->assertStringStartsWith( $snippet,
+			$match->getTextSnippet( $res->termMatches() ),
+			"Highlight a phrase search" );
 	}
 
 	public function testTextPowerSearch() {
@@ -132,7 +188,7 @@ class SearchEngineTest extends MediaWikiLangTestCase {
 				'Talk:Not Main Page',
 			],
 			$this->fetchIds( $this->search->searchText( 'smithee' ) ),
-			"Power search failed" );
+			"Power search" );
 	}
 
 	public function testTitleSearch() {
@@ -142,7 +198,7 @@ class SearchEngineTest extends MediaWikiLangTestCase {
 				'Smithee',
 			],
 			$this->fetchIds( $this->search->searchTitle( 'smithee' ) ),
-			"Title search failed" );
+			"Title search" );
 	}
 
 	public function testTextTitlePowerSearch() {
@@ -154,7 +210,7 @@ class SearchEngineTest extends MediaWikiLangTestCase {
 				'Talk:Smithee',
 			],
 			$this->fetchIds( $this->search->searchTitle( 'smithee' ) ),
-			"Title power search failed" );
+			"Title power search" );
 	}
 
 	/**
@@ -164,7 +220,8 @@ class SearchEngineTest extends MediaWikiLangTestCase {
 		/**
 		 * @var $mockEngine SearchEngine
 		 */
-		$mockEngine = $this->getMock( 'SearchEngine', [ 'makeSearchFieldMapping' ] );
+		$mockEngine = $this->getMockBuilder( 'SearchEngine' )
+			->setMethods( [ 'makeSearchFieldMapping' ] )->getMock();
 
 		$mockFieldBuilder = function ( $name, $type ) {
 			$mockField =
@@ -230,7 +287,7 @@ class SearchEngineTest extends MediaWikiLangTestCase {
 	}
 
 	public function addAugmentors( &$setAugmentors, &$rowAugmentors ) {
-		$setAugmentor = $this->getMock( 'ResultSetAugmentor' );
+		$setAugmentor = $this->createMock( 'ResultSetAugmentor' );
 		$setAugmentor->expects( $this->once() )
 			->method( 'augmentAll' )
 			->willReturnCallback( function ( SearchResultSet $resultSet ) {
@@ -244,7 +301,7 @@ class SearchEngineTest extends MediaWikiLangTestCase {
 			} );
 		$setAugmentors['testSet'] = $setAugmentor;
 
-		$rowAugmentor = $this->getMock( 'ResultAugmentor' );
+		$rowAugmentor = $this->createMock( 'ResultAugmentor' );
 		$rowAugmentor->expects( $this->exactly( 2 ) )
 			->method( 'augment' )
 			->willReturnCallback( function ( SearchResult $result ) {

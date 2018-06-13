@@ -23,7 +23,13 @@
  * @file
  * @ingroup Database
  */
+namespace Wikimedia\Rdbms;
+
 use Wikimedia\ScopedCallback;
+use Exception;
+use RuntimeException;
+use UnexpectedValueException;
+use stdClass;
 
 /**
  * Basic database interface for live and lazy-loaded relation database handles
@@ -200,6 +206,7 @@ interface IDatabase {
 	 * Returns true if this database does an implicit sort when doing GROUP BY
 	 *
 	 * @return bool
+	 * @deprecated Since 1.30; only use grouped or aggregated fields in the SELECT
 	 */
 	public function implicitGroupby();
 
@@ -269,6 +276,14 @@ interface IDatabase {
 	public function pendingWriteCallers();
 
 	/**
+	 * Get the number of affected rows from pending write queries
+	 *
+	 * @return int
+	 * @since 1.30
+	 */
+	public function pendingWriteRowsAffected();
+
+	/**
 	 * Is a connection to the database open?
 	 * @return bool
 	 */
@@ -331,6 +346,7 @@ interface IDatabase {
 	 * Alias for getDomainID()
 	 *
 	 * @return string
+	 * @deprecated 1.30
 	 */
 	public function getWikiID();
 
@@ -359,7 +375,7 @@ interface IDatabase {
 	 * member variables.
 	 * If no more rows are available, false is returned.
 	 *
-	 * @param ResultWrapper|stdClass $res Object as returned from IDatabase::query(), etc.
+	 * @param IResultWrapper|stdClass $res Object as returned from IDatabase::query(), etc.
 	 * @return stdClass|bool
 	 * @throws DBUnexpectedError Thrown if the database returns an error
 	 */
@@ -370,7 +386,7 @@ interface IDatabase {
 	 * form. Fields are retrieved with $row['fieldname'].
 	 * If no more rows are available, false is returned.
 	 *
-	 * @param ResultWrapper $res Result object as returned from IDatabase::query(), etc.
+	 * @param IResultWrapper $res Result object as returned from IDatabase::query(), etc.
 	 * @return array|bool
 	 * @throws DBUnexpectedError Thrown if the database returns an error
 	 */
@@ -386,7 +402,7 @@ interface IDatabase {
 
 	/**
 	 * Get the number of fields in a result object
-	 * @see http://www.php.net/mysql_num_fields
+	 * @see https://secure.php.net/mysql_num_fields
 	 *
 	 * @param mixed $res A SQL result
 	 * @return int
@@ -395,7 +411,7 @@ interface IDatabase {
 
 	/**
 	 * Get a field name in a result object
-	 * @see http://www.php.net/mysql_field_name
+	 * @see https://secure.php.net/mysql_field_name
 	 *
 	 * @param mixed $res A SQL result
 	 * @param int $n
@@ -406,12 +422,9 @@ interface IDatabase {
 	/**
 	 * Get the inserted value of an auto-increment row
 	 *
-	 * The value inserted should be fetched from nextSequenceValue()
-	 *
-	 * Example:
-	 * $id = $dbw->nextSequenceValue( 'page_page_id_seq' );
-	 * $dbw->insert( 'page', [ 'page_id' => $id ] );
-	 * $id = $dbw->insertId();
+	 * This should only be called after an insert that used an auto-incremented
+	 * value. If no such insert was previously done in the current database
+	 * session, the return value is undefined.
 	 *
 	 * @return int
 	 */
@@ -419,7 +432,7 @@ interface IDatabase {
 
 	/**
 	 * Change the position of the cursor in a result object
-	 * @see http://www.php.net/mysql_data_seek
+	 * @see https://secure.php.net/mysql_data_seek
 	 *
 	 * @param mixed $res A SQL result
 	 * @param int $row
@@ -428,7 +441,7 @@ interface IDatabase {
 
 	/**
 	 * Get the last error number
-	 * @see http://www.php.net/mysql_errno
+	 * @see https://secure.php.net/mysql_errno
 	 *
 	 * @return int
 	 */
@@ -436,7 +449,7 @@ interface IDatabase {
 
 	/**
 	 * Get a description of the last error
-	 * @see http://www.php.net/mysql_error
+	 * @see https://secure.php.net/mysql_error
 	 *
 	 * @return string
 	 */
@@ -455,7 +468,7 @@ interface IDatabase {
 
 	/**
 	 * Get the number of rows affected by the last write query
-	 * @see http://www.php.net/mysql_affected_rows
+	 * @see https://secure.php.net/mysql_affected_rows
 	 *
 	 * @return int
 	 */
@@ -463,7 +476,7 @@ interface IDatabase {
 
 	/**
 	 * Returns a wikitext link to the DB's website, e.g.,
-	 *   return "[http://www.mysql.com/ MySQL]";
+	 *   return "[https://www.mysql.com/ MySQL]";
 	 * Should at least contain plain text, if for some reason
 	 * your database has no website.
 	 *
@@ -513,7 +526,7 @@ interface IDatabase {
 	 * @param bool $tempIgnore Whether to avoid throwing an exception on errors...
 	 *     maybe best to catch the exception instead?
 	 * @throws DBError
-	 * @return bool|ResultWrapper True for a successful write query, ResultWrapper object
+	 * @return bool|IResultWrapper True for a successful write query, IResultWrapper object
 	 *     for a successful read query, or false on failure if $tempIgnore set
 	 */
 	public function query( $sql, $fname = __METHOD__, $tempIgnore = false );
@@ -554,11 +567,12 @@ interface IDatabase {
 	 * @param string|array $cond The condition array. See IDatabase::select() for details.
 	 * @param string $fname The function name of the caller.
 	 * @param string|array $options The query options. See IDatabase::select() for details.
+	 * @param string|array $join_conds The query join conditions. See IDatabase::select() for details.
 	 *
 	 * @return bool|mixed The value from the field, or false on failure.
 	 */
 	public function selectField(
-		$table, $var, $cond = '', $fname = __METHOD__, $options = []
+		$table, $var, $cond = '', $fname = __METHOD__, $options = [], $join_conds = []
 	);
 
 	/**
@@ -575,12 +589,13 @@ interface IDatabase {
 	 * @param string|array $cond The condition array. See IDatabase::select() for details.
 	 * @param string $fname The function name of the caller.
 	 * @param string|array $options The query options. See IDatabase::select() for details.
+	 * @param string|array $join_conds The query join conditions. See IDatabase::select() for details.
 	 *
 	 * @return bool|array The values from the field, or false on failure
 	 * @since 1.25
 	 */
 	public function selectFieldValues(
-		$table, $var, $cond = '', $fname = __METHOD__, $options = []
+		$table, $var, $cond = '', $fname = __METHOD__, $options = [], $join_conds = []
 	);
 
 	/**
@@ -727,7 +742,7 @@ interface IDatabase {
 	 *
 	 *    [ 'page' => [ 'LEFT JOIN', 'page_latest=rev_id' ] ]
 	 *
-	 * @return ResultWrapper|bool If the query returned no rows, a ResultWrapper
+	 * @return IResultWrapper|bool If the query returned no rows, a IResultWrapper
 	 *   with no rows in it will be returned. If there was a query error, a
 	 *   DBQueryError exception will be thrown, except if the "ignore errors"
 	 *   option was set, in which case false will be returned.
@@ -905,6 +920,8 @@ interface IDatabase {
 	 * @param array $values An array of values to SET. For each array element,
 	 *   the key gives the field name, and the value gives the data to set
 	 *   that field to. The data will be quoted by IDatabase::addQuotes().
+	 *   Values with integer keys form unquoted SET statements, which can be used for
+	 *   things like "field = field + 1" or similar computed values.
 	 * @param array $conds An array of conditions (WHERE). See
 	 *   IDatabase::select() for the details of the format of condition
 	 *   arrays. Use '*' to update all rows.
@@ -1022,10 +1039,24 @@ interface IDatabase {
 	public function buildStringCast( $field );
 
 	/**
+	 * Returns true if DBs are assumed to be on potentially different servers
+	 *
+	 * In systems like mysql/mariadb, different databases can easily be referenced on a single
+	 * connection merely by name, even in a single query via JOIN. On the other hand, Postgres
+	 * treats databases as fully separate, only allowing mechanisms like postgres_fdw to
+	 * effectively "mount" foreign DBs. This is true even among DBs on the same server.
+	 *
+	 * @return bool
+	 * @since 1.29
+	 */
+	public function databasesAreIndependent();
+
+	/**
 	 * Change the current database
 	 *
 	 * @param string $db
 	 * @return bool Success or failure
+	 * @throws DBConnectionError If databasesAreIndependent() is true and an error occurs
 	 */
 	public function selectDB( $db );
 
@@ -1082,15 +1113,20 @@ interface IDatabase {
 	public function anyString();
 
 	/**
-	 * Returns an appropriately quoted sequence value for inserting a new row.
-	 * MySQL has autoincrement fields, so this is just NULL. But the PostgreSQL
-	 * subclass will return an integer, and save the value for insertId()
+	 * Deprecated method, calls should be removed.
 	 *
-	 * Any implementation of this function should *not* involve reusing
-	 * sequence numbers created for rolled-back transactions.
-	 * See http://bugs.mysql.com/bug.php?id=30767 for details.
+	 * This was formerly used for PostgreSQL and Oracle to handle
+	 * self::insertId() auto-incrementing fields. It is no longer necessary
+	 * since DatabasePostgres::insertId() has been reimplemented using
+	 * `lastval()` and Oracle has been reimplemented using triggers.
+	 *
+	 * Implementations should return null if inserting `NULL` into an
+	 * auto-incrementing field works, otherwise it should return an instance of
+	 * NextSequenceValue and filter it on calls to relevant methods.
+	 *
+	 * @deprecated since 1.30, no longer needed
 	 * @param string $seqName
-	 * @return null|int
+	 * @return null|NextSequenceValue
 	 */
 	public function nextSequenceValue( $seqName );
 
@@ -1148,6 +1184,8 @@ interface IDatabase {
 	 * @param array $set An array of values to SET. For each array element, the
 	 *   key gives the field name, and the value gives the data to set that
 	 *   field to. The data will be quoted by IDatabase::addQuotes().
+	 *   Values with integer keys form unquoted SET statements, which can be used for
+	 *   things like "field = field + 1" or similar computed values.
 	 * @param string $fname Calling function name (use __METHOD__) for logs/profiling
 	 * @throws Exception
 	 * @return bool
@@ -1183,12 +1221,12 @@ interface IDatabase {
 	/**
 	 * DELETE query wrapper.
 	 *
-	 * @param array $table Table name
+	 * @param string $table Table name
 	 * @param string|array $conds Array of conditions. See $conds in IDatabase::select()
 	 *   for the format. Use $conds == "*" to delete all rows
 	 * @param string $fname Name of the calling function
 	 * @throws DBUnexpectedError
-	 * @return bool|ResultWrapper
+	 * @return bool|IResultWrapper
 	 */
 	public function delete( $table, $conds, $fname = __METHOD__ );
 
@@ -1215,12 +1253,14 @@ interface IDatabase {
 	 *    IDatabase::insert() for details.
 	 * @param array $selectOptions Options for the SELECT part of the query, see
 	 *    IDatabase::select() for details.
+	 * @param array $selectJoinConds Join conditions for the SELECT part of the query, see
+	 *    IDatabase::select() for details.
 	 *
-	 * @return ResultWrapper
+	 * @return bool
 	 */
 	public function insertSelect( $destTable, $srcTable, $varMap, $conds,
 		$fname = __METHOD__,
-		$insertOptions = [], $selectOptions = []
+		$insertOptions = [], $selectOptions = [], $selectJoinConds = []
 	);
 
 	/**
@@ -1241,6 +1281,37 @@ interface IDatabase {
 	public function unionQueries( $sqls, $all );
 
 	/**
+	 * Construct a UNION query for permutations of conditions
+	 *
+	 * Databases sometimes have trouble with queries that have multiple values
+	 * for multiple condition parameters combined with limits and ordering.
+	 * This method constructs queries for the Cartesian product of the
+	 * conditions and unions them all together.
+	 *
+	 * @see IDatabase::select()
+	 * @since 1.30
+	 * @param string|array $table Table name
+	 * @param string|array $vars Field names
+	 * @param array $permute_conds Conditions for the Cartesian product. Keys
+	 *  are field names, values are arrays of the possible values for that
+	 *  field.
+	 * @param string|array $extra_conds Additional conditions to include in the
+	 *  query.
+	 * @param string $fname Caller function name
+	 * @param string|array $options Query options. In addition to the options
+	 *  recognized by IDatabase::select(), the following may be used:
+	 *   - NOTALL: Set to use UNION instead of UNION ALL.
+	 *   - INNER ORDER BY: If specified and supported, subqueries will use this
+	 *     instead of ORDER BY.
+	 * @param string|array $join_conds Join conditions
+	 * @return string SQL query string.
+	 */
+	public function unionConditionPermutations(
+		$table, $vars, array $permute_conds, $extra_conds = '', $fname = __METHOD__,
+		$options = [], $join_conds = []
+	);
+
+	/**
 	 * Returns an SQL expression for a simple conditional. This doesn't need
 	 * to be overridden unless CASE isn't supported in your DBMS.
 	 *
@@ -1252,7 +1323,7 @@ interface IDatabase {
 	public function conditional( $cond, $trueVal, $falseVal );
 
 	/**
-	 * Returns a comand for str_replace function in SQL query.
+	 * Returns a command for str_replace function in SQL query.
 	 * Uses REPLACE() in MySQL
 	 *
 	 * @param string $orig Column to modify
@@ -1633,7 +1704,7 @@ interface IDatabase {
 	 * IDatabase::insert().
 	 *
 	 * @param string $b
-	 * @return string
+	 * @return string|Blob
 	 */
 	public function encodeBlob( $b );
 
@@ -1792,10 +1863,6 @@ interface IDatabase {
 	 * @since 1.28
 	 */
 	public function setTableAliases( array $aliases );
-
-	/**
-	 * @deprecated since 1.28 use SearchEngineFactory::getSearchEngineClass instead
-	 * @return string
-	 */
-	public function getSearchEngine();
 }
+
+class_alias( IDatabase::class, 'IDatabase' );

@@ -20,8 +20,6 @@
  * @file
  */
 
-use Cdb\Reader as CdbReader;
-use Cdb\Writer as CdbWriter;
 use CLDRPluralRuleParser\Evaluator;
 use CLDRPluralRuleParser\Error as CLDRPluralRuleError;
 use MediaWiki\MediaWikiServices;
@@ -183,7 +181,6 @@ class LocalisationCache {
 	private $mergeableKeys = null;
 
 	/**
-	 * Constructor.
 	 * For constructor parameters, see the documentation in DefaultSettings.php
 	 * for $wgLocalisationCacheConf.
 	 *
@@ -226,7 +223,7 @@ class LocalisationCache {
 			}
 		}
 
-		wfDebugLog( 'caches', get_class( $this ) . ": using store $storeClass" );
+		wfDebugLog( 'caches', static::class . ": using store $storeClass" );
 		if ( !empty( $conf['storeDirectory'] ) ) {
 			$storeConf['directory'] = $conf['storeDirectory'];
 		}
@@ -311,7 +308,7 @@ class LocalisationCache {
 	 * array.
 	 * @param string $code
 	 * @param string $key
-	 * @return bool|null|string
+	 * @return bool|null|string|string[]
 	 */
 	public function getSubitemList( $code, $key ) {
 		if ( in_array( $key, self::$splitKeys ) ) {
@@ -547,7 +544,6 @@ class LocalisationCache {
 	 * @return array Array with a 'messages' key, or empty array if the file doesn't exist
 	 */
 	public function readJSONFile( $fileName ) {
-
 		if ( !is_readable( $fileName ) ) {
 			return [];
 		}
@@ -559,7 +555,6 @@ class LocalisationCache {
 
 		$data = FormatJson::decode( $json, true );
 		if ( $data === null ) {
-
 			throw new MWException( __METHOD__ . ": Invalid JSON file: $fileName" );
 		}
 
@@ -690,7 +685,7 @@ class LocalisationCache {
 	 * exists, the data array is returned, otherwise false is returned.
 	 *
 	 * @param string $code
-	 * @param array $deps
+	 * @param array &$deps
 	 * @return array
 	 */
 	protected function readSourceFilesAndRegisterDeps( $code, &$deps ) {
@@ -722,7 +717,7 @@ class LocalisationCache {
 	 * Merge two localisation values, a primary and a fallback, overwriting the
 	 * primary value in place.
 	 * @param string $key
-	 * @param mixed $value
+	 * @param mixed &$value
 	 * @param mixed $fallbackValue
 	 */
 	protected function mergeItem( $key, &$value, $fallbackValue ) {
@@ -752,7 +747,7 @@ class LocalisationCache {
 	}
 
 	/**
-	 * @param mixed $value
+	 * @param mixed &$value
 	 * @param mixed $fallbackValue
 	 */
 	protected function mergeMagicWords( &$value, $fallbackValue ) {
@@ -778,7 +773,7 @@ class LocalisationCache {
 	 * otherwise.
 	 * @param array $codeSequence
 	 * @param string $key
-	 * @param mixed $value
+	 * @param mixed &$value
 	 * @param mixed $fallbackValue
 	 * @return bool
 	 */
@@ -1034,7 +1029,6 @@ class LocalisationCache {
 			$blobStore = new MessageBlobStore();
 			$blobStore->clear();
 		}
-
 	}
 
 	/**
