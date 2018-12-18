@@ -18,6 +18,7 @@
  * http://www.gnu.org/copyleft/gpl.html
  */
 
+use MediaWiki\MediaWikiServices;
 use MediaWiki\Session\BotPasswordSessionProvider;
 use Wikimedia\Rdbms\IMaintainableDatabase;
 
@@ -74,9 +75,10 @@ class BotPassword implements IDBAccessObject {
 	public static function getDB( $db ) {
 		global $wgBotPasswordsCluster, $wgBotPasswordsDatabase;
 
+		$lbFactory = MediaWikiServices::getInstance()->getDBLoadBalancerFactory();
 		$lb = $wgBotPasswordsCluster
-			? wfGetLBFactory()->getExternalLB( $wgBotPasswordsCluster )
-			: wfGetLB( $wgBotPasswordsDatabase );
+			? $lbFactory->getExternalLB( $wgBotPasswordsCluster )
+			: $lbFactory->getMainLB( $wgBotPasswordsDatabase );
 		return $lb->getConnectionRef( $db, [], $wgBotPasswordsDatabase );
 	}
 
@@ -257,6 +259,15 @@ class BotPassword implements IDBAccessObject {
 		} catch ( PasswordError $ex ) {
 			return PasswordFactory::newInvalidPassword();
 		}
+	}
+
+	/**
+	 * Whether the password is currently invalid
+	 * @since 1.32
+	 * @return bool
+	 */
+	public function isInvalid() {
+		return $this->getPassword() instanceof InvalidPassword;
 	}
 
 	/**
@@ -462,6 +473,10 @@ class BotPassword implements IDBAccessObject {
 			return Status::newFatal( 'nosuchuser', $name );
 		}
 
+		if ( $user->isLocked() ) {
+			return Status::newFatal( 'botpasswords-locked' );
+		}
+
 		// Throttle
 		$throttle = null;
 		if ( !empty( $wgPasswordAttemptThrottle ) ) {
@@ -489,7 +504,11 @@ class BotPassword implements IDBAccessObject {
 		}
 
 		// Check the password
-		if ( !$bp->getPassword()->equals( $password ) ) {
+		$passwordObj = $bp->getPassword();
+		if ( $passwordObj instanceof InvalidPassword ) {
+			return Status::newFatal( 'botpasswords-needs-reset', $name, $appId );
+		}
+		if ( !$passwordObj->equals( $password ) ) {
 			return Status::newFatal( 'wrongpassword' );
 		}
 
